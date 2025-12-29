@@ -7,7 +7,6 @@ python mainv2.py \
     --lr 0.001\
     --feature-size 2048 \
     --gt list/gt-ucf-RTFM.npy\
-    --create True\
     --datasetname UCF \
-    --pseudofile Unsup_labels/UCF_unsup_labels_original_V2.npy \
+    --pseudofile Unsup_labels/UCF_unsup_labels_i3d_varT.npy \
     --conall concat_UCF\

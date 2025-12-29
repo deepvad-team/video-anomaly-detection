@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
-torch.set_default_tensor_type('torch.cuda.FloatTensor')
+#torch.set_default_tensor_type('torch.cuda.FloatTensor')
 from torch.nn import L1Loss
 from torch.nn import MSELoss
 import option
@@ -126,17 +126,26 @@ def concatenated_train_top(loader, model, optimizer,device):
 
 def concatenated_train_feedback(loader, model, optimizer, original_label, device):
     with torch.set_grad_enabled(True):
+
         model.train()
 
         losses = []
         original_labels = original_label
         new_labels = []
+
         import time
         start = time.time()
-        for _, (input, idx) in enumerate(loader):
-            labels = original_labels[idx]
-            input, labels = input.to(device), labels.to(device)
-            labels = labels.float()
+
+        for it, (input, idx) in enumerate(loader):
+            if it==0:
+                print(">>> got first batch", input.shape, idx.shape)
+            #먼저 GPU로 올리기
+            input = input.to(device, non_blocking = True)
+            idx = idx.to(device, non_blocking = True)
+            #그 다음 gpu tensor로 라벨 인덱싱
+            labels = original_labels[idx].float()
+            #input, labels = input.to(device), labels.to(device)
+            #labels = labels.float()
 
             optimizer.zero_grad()
             # scores, feat_select_top, feat_select_low, top_select_score = model(input)
@@ -147,7 +156,7 @@ def concatenated_train_feedback(loader, model, optimizer, original_label, device
             # loss_smooth = smooth(scores, 8e-4)
             total_loss = loss # + loss_sparse + loss_smooth
             
-            losses.append(total_loss.cpu().detach().numpy())
+            losses.append(total_loss.cpu().detach().item())
             trans = scores
             # trans = torch.where(scores > 0.6, 1.0, 0.0)
             # trans = (scores + labels)/2
@@ -157,8 +166,16 @@ def concatenated_train_feedback(loader, model, optimizer, original_label, device
 
             total_loss.backward()
             optimizer.step()
-        print(time.time() - start)
-        return np.mean(losses), new_labels
+
+            if it == 0:
+                print("first iter done", time.time() - start)
+            #if it == 10:
+                #print("iter 10 done", time.time() - start)
+                #break
+
+        print("epoch time:", time.time() - start)
+
+        return float(np.mean(losses)), new_labels
 
 
 

@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.init as torch_init
-torch.set_default_tensor_type('torch.cuda.FloatTensor')
+#torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
 def weight_init(m):
     classname = m.__class__.__name__
@@ -53,23 +53,32 @@ class Model_V2(nn.Module): # multiplication then Addition
 
 
     def forward(self, inputs):
-        x = self.fc1(inputs)
+        # inputs: (B, T, 2048) OR (B,2048)
+        orig_shape = inputs.shape
 
-   
+        if inputs.dim() == 3: #4
+            B, T, D = inputs.shape
+            x = inputs.reshape(B*T, D) #(B*T, 2048)
+            #inputs = inputs.mean(dim=2)  # crop(10) 평균 -> (B, 32, 2048)
+        else:
+            x = inputs
 
+        #x = self.fc1(inputs)
+        x = self.fc1(x)
         x = self.relu(x)
         x = self.dropout(x)
         
 
         x = self.fc2(x)
-   
-
         x = self.relu(x)
-        
         x = self.dropout(x)
 
         x = self.sigmoid(self.fc3(x))
 
-        x = x.mean(dim = 1)
+        #지금 32개의 segment 축 평균을 계산해서 segment level anomaly score 가 아닌 (128,10,1) crop level 점수를 내고있었음.
+        #x = x.mean(dim = 1) 
+
+        if len(orig_shape) == 3:
+            x = x.reshape(B,T,1)
 
         return x
