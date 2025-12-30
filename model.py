@@ -64,12 +64,16 @@ class Model_V2(nn.Module): # multiplication then Addition
             x = inputs
 
         #x = self.fc1(inputs)
+        att1 = self.fc_att1(x)
         x = self.fc1(x)
+        x = (x * att1) + x
         x = self.relu(x)
         x = self.dropout(x)
         
 
+        att2 = self.fc_att2(x)
         x = self.fc2(x)
+        x = (x * att2) + x
         x = self.relu(x)
         x = self.dropout(x)
 

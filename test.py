@@ -161,8 +161,15 @@ if __name__ == '__main__':
                             nalist_path="list/nalist_test_i3d.npy"), 
                             batch_size=args.batch_size, shuffle=False, 
                             num_workers=args.workers, pin_memory=True, drop_last=False)
+    import glob
+    pattern = os.path.join("unsupervised_ckpt", f"{args.datasetname}_best_*.pkl")
+    ckpts = glob.glob(pattern)
+    if not ckpts:
+        raise FileNotFoundError(f"no ckpt: {pattern}")
+
+    ckpt_path = max(ckpts, key = os.path.getmtime)
+    print("Loading:", ckpt_path)
     
-    ckpt_path = r"./unsupervised_ckpt/UCF_best.pkl"  
     state = torch.load(ckpt_path, map_location=device)
 
     model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in state.items()})

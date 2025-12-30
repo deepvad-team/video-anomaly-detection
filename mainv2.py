@@ -32,9 +32,17 @@ if __name__ == '__main__':
     set_seed(42)
 
     len_N, original_lables  = Concat_list_all_crop_feedback(Test=False, create='False')
+
     wandb.login()
     wandb.init(project="Unsupervised Anomaly Detection", config=args)
-    
+
+    from datetime import datetime
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = wandb.run.id
+
+    best_path  = f'unsupervised_ckpt/{args.datasetname}_best_{ts}_{run_id}.pkl'
+    final_path = f'unsupervised_ckpt/{args.datasetname}_final_{ts}_{run_id}.pkl'
+
     test_loader = DataLoader(UCFTestVideoDataset("Concat_test_10.npy", "list/nalist_test_i3d.npy"), 
                             batch_size=1, shuffle=False, 
                             num_workers=args.workers, pin_memory=False, drop_last=False)
@@ -45,29 +53,26 @@ if __name__ == '__main__':
                                 num_workers=args.workers, pin_memory=True, drop_last=True)
     
     model = Model_V2(args.feature_size)
-
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Number of parameters: {total_params}")
-    if not os.path.exists('./ckpt'):
-        os.makedirs('./ckpt')
-    
     
     optimizer = optim.SGD(model.parameters(), lr=0.01, weight_decay=5e-4, momentum=0.9, nesterov=True)
     scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[15, 25], gamma=0.1)
-
-    test_info = {"epoch": [], "test_auc": []}
-
+    
     auc, ap = test(test_loader, model, args, device)
+    
     print("epcoh 0 auc = ", auc)
     wandb.log({'AUC': auc,'AP': ap}, step=0)
     best_auc = auc
-    best_path = f'unsupervised_ckpt/{args.datasetname}_best.pkl'
+
     #epoch 0 모델도 best로 저장함
     torch.save(model.state_dict(), best_path)
-    print("init best_auc:", best_auc)
+    print("init best_auc:", best_auc, "->", best_path)
+
+    test_info = {"epoch": [], "test_auc": []}
 
     for epoch in tqdm(range(1, args.max_epoch + 1), total=args.max_epoch, dynamic_ncols=True):
         loss, lls = concatenated_train_feedback(train_loader, model, optimizer,original_lables, device )
@@ -85,8 +90,9 @@ if __name__ == '__main__':
         print('\nEpoch {}/{}, LR: {:.4f} auc: {:.4f}, ap: {:.4f}, loss: {:.4f}\n'.format(epoch, args.max_epoch, optimizer.param_groups[0]['lr'] , auc, ap, loss))
         wandb.log({'AUC': auc,'AP': ap, 'loss': loss}, step=(epoch+1)*544)
 
-    wandb.run.name = args.datasetname
-    torch.save(model.state_dict(), 'unsupervised_ckpt/' + args.datasetname + 'final.pkl')
+    #wandb.run.name = args.datasetname
+    torch.save(model.state_dict(),final_path)
+    print("saved final ->", final_path)
 
 
         
