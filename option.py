@@ -17,7 +17,7 @@ parser.add_argument('--model-name', default='C2FPL', help='name to save model')
 parser.add_argument('--num-classes', type=int, default=1, help='number of class')
 parser.add_argument('--datasetname', default='UCF', help='dataset to train on (default: )')
 
-parser.add_argument('--max-epoch', type=int, default=30, help='maximum iteration to train (default: 100)')
+parser.add_argument('--max-epoch', type=int, default=100, help='maximum iteration to train (default: 100)')
 
 parser.add_argument('--optimizer', default='SGD', help='Number of segments of each video')
 parser.add_argument('--lossfn', default='BCE', help='Number of segments of each video')

@@ -61,7 +61,11 @@ def test(dataloader, model, args, device):
 def test(dataloader, model, args, device):
     model.eval()
     gt_all = np.load(args.gt, allow_pickle=True)
+    print("gt_all shape:", gt_all.shape, "dtype:", gt_all.dtype)
+    assert gt_all.ndim == 1, f"gt_all must be 1D frame array, got shape {gt_all.shape}, dtype={gt_all.dtype}"
+
     ptr = 0
+    total_frames = len(gt_all)
 
     preds = []
     gts = []
@@ -79,6 +83,13 @@ def test(dataloader, model, args, device):
 
             T = pred.shape[0]
             pred_frame = np.repeat(pred, 16)         # (T*16,)
+
+            need = T * 16
+            # 슬라이스 전에 범위 초과 체크 (가장 중요)
+            assert ptr + need <= total_frames, (
+                f"GT slice out of range at video {i}: ptr={ptr}, need={need}, total={total_frames}"
+            )
+
             gt_i = gt_all[ptr:ptr + T*16]
             ptr += T*16
 
@@ -97,18 +108,25 @@ def test(dataloader, model, args, device):
         print("DEBUG: len(gt) =", len(gt_all2))
         print("DEBUG: len(pred) =", len(pred_all))
         test._printed_len = True
+        
+    assert len(pred_all) == len(gt_all2), (len(pred_all), len(gt_all2))
 
     fpr, tpr, _ = roc_curve(gt_all2, pred_all)
-    np.save('fpr.npy', fpr)
-    np.save('tpr.npy', tpr)
+    #np.save('fpr.npy', fpr)
+    #np.save('tpr.npy', tpr)
     rec_auc = auc(fpr, tpr)
 
     print('auc: ' + str(rec_auc))
 
     precision, recall, _ = precision_recall_curve(gt_all2, pred_all)
     pr_auc = auc(recall, precision)
+
+    assert ptr == total_frames, (ptr, total_frames)
+    print("ptr ok:", ptr)
+
     np.save('precision.npy', precision)
     np.save('recall.npy', recall)
+
 
     # np.save('UCF_pred/'+'{}-pred_UCFV1_i3d.npy'.format(epoch), pred)
     return rec_auc, pr_auc
@@ -159,7 +177,7 @@ if __name__ == '__main__':
     model = Model_V2(args.feature_size).to(device)
     test_loader = DataLoader(UCFTestVideoDataset(conall_path="Concat_test_10.npy",
                             nalist_path="list/nalist_test_i3d.npy"), 
-                            batch_size=args.batch_size, shuffle=False, 
+                            batch_size=1, shuffle=False, 
                             num_workers=args.workers, pin_memory=True, drop_last=False)
     import glob
     pattern = os.path.join("unsupervised_ckpt", f"{args.datasetname}_best_*.pkl")

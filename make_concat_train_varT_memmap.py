@@ -4,7 +4,7 @@ import numpy as np
 # 네가 방금 만든 "로컬 절대경로 list" (1609개, 순서=저자 split)
 TRAIN_LOCAL_LIST = r"list\\ucf-i3d_train_fixed_local.list"
 
-# 저자가 준 nalist (1609,2)  sum(T)=779951
+# 저자가 준 nalist (1609,2)  sum(T)=779951 -> 1개가 빠져있음.
 NALIST_PATH = r"list\\nalist.npy"
 
 # 출력 파일명 유지 (하지만 shape는 var-T concat 형태로 바뀜!)
