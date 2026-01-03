@@ -175,7 +175,7 @@ if __name__ == '__main__':
     # con_all = np.load('{}.npy'.format(args.conall))
     device = torch.device("cuda")
     model = Model_V2(args.feature_size).to(device)
-    test_loader = DataLoader(UCFTestVideoDataset(conall_path="Concat_test_10.npy",
+    test_loader = DataLoader(UCFTestVideoDataset(conall_path="../C2FPL/Concat_test_10.npy",
                             nalist_path="list/nalist_test_i3d.npy"), 
                             batch_size=1, shuffle=False, 
                             num_workers=args.workers, pin_memory=True, drop_last=False)

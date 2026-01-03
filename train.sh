@@ -8,5 +8,5 @@ python mainv2.py \
     --feature-size 2048 \
     --gt list/gt-ucf-RTFM.npy\
     --datasetname UCF \
-    --pseudofile Unsup_labels/UCF_unsup_labels_i3d_varT.npy \
+    --pseudofile Unsup_labels/UCF_unsup_labels_i3d_varT_paper.npy \
     --conall concat_UCF\

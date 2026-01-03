@@ -11,6 +11,6 @@ python test.py \
     --windowsize 0.15\
     --eps 0.225 \
     --eps2 1.32475  \
-    --pseudofile Unsup_labels/UCF_unsup_labels_i3d_varT.npy\
+    --pseudofile Unsup_labels/UCF_unsup_labels_i3d_varT_paper.npy\
     --conall concat_UCF\
     #--create True\

@@ -26,7 +26,7 @@ def Concat_list_all_crop_feedback(Test=False, create='False'): #UCF
     current_time = now.strftime("%Y-%m-%d_%H:%M:%S")
     if Test is True:
         # con_test = np.load("concatenated/Concat_test_10.npy")
-        con_test = np.memmap('Concat_test_10.npy', dtype='float32', mode='r', shape=(290, 32, 10, 2048)).copy()
+        con_test = np.memmap('../C2FPL/Concat_test_10.npy', dtype='float32', mode='r', shape=(290, 32, 10, 2048)).copy()
         # con_test = np.load("/l/users/anas.al-lahham/concat_test_XD_5crop.npy")
         print('Testset size:', con_test.shape)
         # con_test

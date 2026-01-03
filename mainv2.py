@@ -36,19 +36,29 @@ if __name__ == '__main__':
     wandb.login()
     wandb.init(project="Unsupervised Anomaly Detection", config=args)
 
+    import subprocess
+
+    git_commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode().strip()
+    git_branch = subprocess.check_output(["git", "branch", "--show-current"]).decode().strip()
+
+    wandb.config.update({"git_commit": git_commit, "git_branch": git_branch}, allow_val_change=True)
+    wandb.run.name = f"{args.datasetname}_{ts}_{git_commit}"
+
+
     from datetime import datetime
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_id = wandb.run.id
 
+    os.makedirs("unsupervised_ckpt", exist_ok=True)
     best_path  = f'unsupervised_ckpt/{args.datasetname}_best_{ts}_{run_id}.pkl'
     final_path = f'unsupervised_ckpt/{args.datasetname}_final_{ts}_{run_id}.pkl'
 
-    test_loader = DataLoader(UCFTestVideoDataset("Concat_test_10.npy", "list/nalist_test_i3d.npy"), 
+    test_loader = DataLoader(UCFTestVideoDataset("../C2FPL/Concat_test_10.npy", "list/nalist_test_i3d.npy"), 
                             batch_size=1, shuffle=False, 
                             num_workers=args.workers, pin_memory=False, drop_last=False)
     
     
-    train_loader = DataLoader(UCFTrainSnippetDataset("concat_UCF.npy", args.pseudofile), 
+    train_loader = DataLoader(UCFTrainSnippetDataset("../C2FPL/concat_UCF.npy", args.pseudofile), 
                                 batch_size=args.batch_size, shuffle=True, 
                                 num_workers=args.workers, pin_memory=True, drop_last=True)
     
