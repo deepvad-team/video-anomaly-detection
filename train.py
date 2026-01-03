@@ -136,22 +136,22 @@ def concatenated_train_feedback(loader, model, optimizer, original_label, device
         import time
         start = time.time()
 
-        for it, (input, idx) in enumerate(loader):
+        for it, (input, soft) in enumerate(loader):
             if it==0:
-                print(">>> got first batch", input.shape, idx.shape)
+                print(">>> got first batch", input.shape, soft.shape)
             #먼저 GPU로 올리기
             input = input.to(device, non_blocking = True)
-            idx = idx.to(device, non_blocking = True)
+            soft = soft.to(device, non_blocking = True)
             #그 다음 gpu tensor로 라벨 인덱싱
-            labels = original_labels[idx].float()
+            #labels = original_labels[idx].float()
             #input, labels = input.to(device), labels.to(device)
             #labels = labels.float()
 
             optimizer.zero_grad()
             # scores, feat_select_top, feat_select_low, top_select_score = model(input)
             scores = model(input)
-            scores = scores.float().flatten()
-            loss = loss_fn(scores, labels)
+            scores = scores.flatten()
+            loss = loss_fn(scores, soft)
             # loss_sparse = sparsity(scores, 8e-3)
             # loss_smooth = smooth(scores, 8e-4)
             total_loss = loss # + loss_sparse + loss_smooth
@@ -161,7 +161,7 @@ def concatenated_train_feedback(loader, model, optimizer, original_label, device
             # trans = torch.where(scores > 0.6, 1.0, 0.0)
             # trans = (scores + labels)/2
             trans = trans.cpu().detach().numpy()
-            res = list(zip(idx.cpu().numpy(), trans))
+            res = list(zip(soft.cpu().numpy(), trans))
             new_labels += res
 
             total_loss.backward()

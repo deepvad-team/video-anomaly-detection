@@ -79,7 +79,9 @@ def test(dataloader, model, args, device):
 
             logits = model(inputs=x)                 # (1,T,1)
             logits = logits.squeeze(0).squeeze(-1)   # (T,)
-            pred = logits.detach().cpu().numpy()
+
+            prob = torch.sigmoid(logits)
+            pred = prob.detach().cpu().numpy()
 
             T = pred.shape[0]
             pred_frame = np.repeat(pred, 16)         # (T*16,)
