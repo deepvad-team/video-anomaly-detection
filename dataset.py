@@ -65,8 +65,8 @@ class Dataset_Con_all_feedback_XD(data.Dataset):
 class UCFTrainSnippetDataset(data.Dataset):
     def __init__(self, conall_path, pseudo_path):
         # pseudo_path로 길이(sumT)만 맞추려는 용도 (실제 라벨은 original_labels에서 idx로 뽑음)
-        pseudo = np.load(pseudo_path).astype(np.float32)   # (sumT,)
-        self.total_T = pseudo.shape[0]
+        self.pseudo = np.load(pseudo_path).astype(np.float32)   # (sumT,)
+        self.total_T = self.pseudo.shape[0]
         self.con_all = np.memmap(conall_path, dtype="float32", mode="r",
                                  shape=(self.total_T, 10, 2048))
 
@@ -81,10 +81,10 @@ class UCFTrainSnippetDataset(data.Dataset):
         #x = torch.from_numpy(x)                            # CPU float32
 
         # idx는 original_labels(=CUDA tensor)에서 바로 인덱싱 되도록 CUDA LongTensor로 반환 (num_workers=0이면 안전)
-        idx_t = torch.tensor(idx, dtype=torch.long)
+        soft = torch.tensor(self.pseudo[idx], dtype=torch.float32)
 
 
-        return x, idx_t
+        return x, soft
 
 
 class UCFTestVideoDataset(data.Dataset):

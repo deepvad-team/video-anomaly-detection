@@ -43,12 +43,12 @@ if __name__ == '__main__':
     best_path  = f'unsupervised_ckpt/{args.datasetname}_best_{ts}_{run_id}.pkl'
     final_path = f'unsupervised_ckpt/{args.datasetname}_final_{ts}_{run_id}.pkl'
 
-    test_loader = DataLoader(UCFTestVideoDataset("Concat_test_10.npy", "list/nalist_test_i3d.npy"), 
+    test_loader = DataLoader(UCFTestVideoDataset("../C2FPL/Concat_test_10.npy", "list/nalist_test_i3d.npy"), 
                             batch_size=1, shuffle=False, 
                             num_workers=args.workers, pin_memory=False, drop_last=False)
     
     
-    train_loader = DataLoader(UCFTrainSnippetDataset("concat_UCF.npy", args.pseudofile), 
+    train_loader = DataLoader(UCFTrainSnippetDataset("../C2FPL/concat_UCF.npy", args.pseudofile), 
                                 batch_size=args.batch_size, shuffle=True, 
                                 num_workers=args.workers, pin_memory=True, drop_last=True)
     

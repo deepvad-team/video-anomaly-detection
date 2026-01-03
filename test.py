@@ -79,7 +79,9 @@ def test(dataloader, model, args, device):
 
             logits = model(inputs=x)                 # (1,T,1)
             logits = logits.squeeze(0).squeeze(-1)   # (T,)
-            pred = logits.detach().cpu().numpy()
+
+            prob = torch.sigmoid(logits)
+            pred = prob.detach().cpu().numpy()
 
             T = pred.shape[0]
             pred_frame = np.repeat(pred, 16)         # (T*16,)
@@ -90,8 +92,8 @@ def test(dataloader, model, args, device):
                 f"GT slice out of range at video {i}: ptr={ptr}, need={need}, total={total_frames}"
             )
 
-            gt_i = gt_all[ptr:ptr + T*16]
-            ptr += T*16
+            gt_i = gt_all[ptr:ptr + need]
+            ptr += need
 
             preds.append(pred_frame)
             gts.append(gt_i)
@@ -175,7 +177,7 @@ if __name__ == '__main__':
     # con_all = np.load('{}.npy'.format(args.conall))
     device = torch.device("cuda")
     model = Model_V2(args.feature_size).to(device)
-    test_loader = DataLoader(UCFTestVideoDataset(conall_path="Concat_test_10.npy",
+    test_loader = DataLoader(UCFTestVideoDataset(conall_path="../C2FPL/Concat_test_10.npy",
                             nalist_path="list/nalist_test_i3d.npy"), 
                             batch_size=1, shuffle=False, 
                             num_workers=args.workers, pin_memory=True, drop_last=False)
