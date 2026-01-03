@@ -61,3 +61,17 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+'''출력 결과
+videos: 1609
+expected sum(T) from nalist: 779951
+Traceback (most recent call last):
+  File "c:\Users\jplabuser\C2FPL\make_concat_train_varT_memmap.py", line 63, in <module>
+    main()
+    ~~~~^^
+  File "c:\Users\jplabuser\C2FPL\make_concat_train_varT_memmap.py", line 48, in main
+    raise RuntimeError(
+    ...<2 lines>...
+    )
+RuntimeError: ORDER/LENGTH MISMATCH at idx=0: file=Abuse001_x264_i3d.npy  T=171  expected=34 (from nalist)
+'''
