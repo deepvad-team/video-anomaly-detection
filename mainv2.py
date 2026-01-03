@@ -36,6 +36,10 @@ if __name__ == '__main__':
     wandb.login()
     wandb.init(project="Unsupervised Anomaly Detection", config=args)
 
+    from datetime import datetime
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = wandb.run.id
+
     import subprocess
 
     git_commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode().strip()
@@ -44,10 +48,6 @@ if __name__ == '__main__':
     wandb.config.update({"git_commit": git_commit, "git_branch": git_branch}, allow_val_change=True)
     wandb.run.name = f"{args.datasetname}_{ts}_{git_commit}"
 
-
-    from datetime import datetime
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_id = wandb.run.id
 
     os.makedirs("unsupervised_ckpt", exist_ok=True)
     best_path  = f'unsupervised_ckpt/{args.datasetname}_best_{ts}_{run_id}.pkl'
