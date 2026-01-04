@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 args = option.parser.parse_args()
 # loss_fn = torch.nn.MSELoss()
-loss_fn = torch.nn.BCELoss()
+loss_fn = torch.nn.BCELoss(reduction="none") 
 # loss_fn = torch.nn.HingeEmbeddingLoss()
 
 
@@ -124,7 +124,7 @@ def concatenated_train_top(loader, model, optimizer,device):
 
 
 
-def concatenated_train_feedback(loader, model, optimizer, original_label, device):
+def concatenated_train_feedback(loader, model, optimizer, original_label, device, epoch, args):
     with torch.set_grad_enabled(True):
 
         model.train()
@@ -136,12 +136,21 @@ def concatenated_train_feedback(loader, model, optimizer, original_label, device
         import time
         start = time.time()
 
+        tau_start = 0.9
+        tau_end = 0.3
+        denom = max(args.max_epoch-1,1)
+        tau = tau_start + (tau_end - tau_start) * (epoch - 1) /denom
+
+        neg_w = 0.2 #soft label 0도 약하게 학습
+
         for it, (input, soft) in enumerate(loader):
             if it==0:
                 print(">>> got first batch", input.shape, soft.shape)
             #먼저 GPU로 올리기
             input = input.to(device, non_blocking = True)
-            soft = soft.to(device, non_blocking = True)
+            soft = soft.to(device, non_blocking = True).float()
+            soft = torch.clamp(soft, 0.0, 1.0) #안전장치
+
             #그 다음 gpu tensor로 라벨 인덱싱
             #labels = original_labels[idx].float()
             #input, labels = input.to(device), labels.to(device)
@@ -151,10 +160,26 @@ def concatenated_train_feedback(loader, model, optimizer, original_label, device
             # scores, feat_select_top, feat_select_low, top_select_score = model(input)
             scores = model(input)
             scores = scores.flatten()
-            loss = loss_fn(scores, soft)
+            scores = torch.clamp(scores, 1e-6, 1.0 - 1e-6)  # BCE 수치안정 
+            
+            #샘플별 loss
+            per_loss = loss_fn(scores,soft)
+
+            #self-paced weight
+            w_pos = torch.clamp((soft-tau) / (1.0 - tau + 1e-6), 0.0, 1.0)
+            w_neg = neg_w * (soft <= 0.0).float()
+            w = torch.maximum(w_pos, w_neg)
+
+            if w.sum().item() < 1.0:
+                w = torch.ones_like(w) * neg_w
+            
+            total_loss = (w * per_loss).sum() / (w.sum() + 1e-6)
+
+            
+            #loss = loss_fn(scores, soft)
             # loss_sparse = sparsity(scores, 8e-3)
             # loss_smooth = smooth(scores, 8e-4)
-            total_loss = loss # + loss_sparse + loss_smooth
+            #total_loss = loss # + loss_sparse + loss_smooth
             
             losses.append(total_loss.cpu().detach().item())
             trans = scores

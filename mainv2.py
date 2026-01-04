@@ -85,7 +85,7 @@ if __name__ == '__main__':
     test_info = {"epoch": [], "test_auc": []}
 
     for epoch in tqdm(range(1, args.max_epoch + 1), total=args.max_epoch, dynamic_ncols=True):
-        loss, lls = concatenated_train_feedback(train_loader, model, optimizer,original_lables, device )
+        loss, lls = concatenated_train_feedback(train_loader, model, optimizer,original_lables, device, epoch, args)
         auc, ap = test(test_loader, model, args, device)
         if auc > best_auc:
             best_auc = auc
