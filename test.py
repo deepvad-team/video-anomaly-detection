@@ -78,10 +78,15 @@ def test(dataloader, model, args, device):
                 x = x.unsqueeze(0)
 
             logits = model(inputs=x)                 # (1,T,1)
-            logits = logits.squeeze(0).squeeze(-1)   # (T,)
+            #logits = logits.squeeze(0).squeeze(-1)   # (T,)
 
-            prob = torch.sigmoid(logits)
-            pred = prob.detach().cpu().numpy()
+            alpha = logits + 1
+            S = torch.sum(alpha, dim=-1, keepdim=True)
+
+            prob = alpha[:, :, 1] / S.squeeze(-1)
+
+            u = 2.0 / S.squeeze(-1)
+            pred = (prob * (1.0 - u)).squeeze(0).cpu().numpy()
 
             T = pred.shape[0]
             pred_frame = np.repeat(pred, 16)         # (T*16,)

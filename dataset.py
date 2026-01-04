@@ -5,6 +5,7 @@ import torch
 #torch.set_default_tensor_type('torch.cuda.FloatTensor')
 from tqdm import tqdm
 import option
+import torch.nn.functional as F
 
 args = option.parser.parse_args()
 
@@ -66,18 +67,35 @@ class UCFTrainSnippetDataset(data.Dataset):
     def __init__(self, conall_path, pseudo_path):
         # pseudo_path로 길이(sumT)만 맞추려는 용도 (실제 라벨은 original_labels에서 idx로 뽑음)
         self.pseudo = np.load(pseudo_path).astype(np.float32)   # (sumT,)
-        self.total_T = self.pseudo.shape[0]
+
+        nalist = np.load('list/nalist.npy')
+
+        self.num_videos = nalist.shape[0]
+        self.target_segments = 32
+
+        sampled_labels = []
+        for i in range(self.num_videos):
+            start, end = map(int, nalist[i])
+            video_label = self.pseudo[start:end] # 해당 영상의 전체 프레임 라벨 (예: 171개)
+            
+            # 피처 때와 똑같이 32개로 보간(Interpolate)
+            label_tensor = torch.from_numpy(video_label).view(1, 1, -1) # (1, 1, T)
+            resampled_label = F.interpolate(label_tensor, size=self.target_segments, mode='linear', align_corners=False)
+            sampled_labels.append(resampled_label.view(-1).numpy()) # (32,)
+            
+        self.pseudo = np.array(sampled_labels) # (1610, 32) 완성!
+
         self.con_all = np.memmap(conall_path, dtype="float32", mode="r",
-                                 shape=(self.total_T, 10, 2048))
+                                 shape=(self.num_videos, 32, 10, 2048))
 
     def __len__(self):
-        return self.total_T
+        return self.num_videos
 
     def __getitem__(self, idx):
         #x = np.array(self.con_all[idx], dtype=np.float32)  # (10,2048)
         #x = x.mean(axis=0)                                 # (2048,)
-        x = torch.from_numpy(self.con_all[idx].copy())
-        x = x.mean(dim=0)
+        x = torch.from_numpy(self.con_all[idx])
+        x = x.mean(dim=1)
         #x = torch.from_numpy(x)                            # CPU float32
 
         # idx는 original_labels(=CUDA tensor)에서 바로 인덱싱 되도록 CUDA LongTensor로 반환 (num_workers=0이면 안전)

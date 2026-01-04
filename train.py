@@ -122,19 +122,46 @@ def concatenated_train_top(loader, model, optimizer,device):
         return np.mean(losses)
 
 
+def evidential_loss(evidence, target, epoch):
+    """
+    evidence: (Batch, T, 2) - 모델의 출력
+    target: (Batch, T) - ipynb에서 온 pseudo label (0 or 1)
+    """
 
+    K = 2 # Normal, Anomaly
+    alpha = evidence + 1
+    S = torch.sum(alpha, dim=-1, keepdim=True)
+    
+    p = alpha / S
+    
+    target_oh = F.one_hot(target, num_classes=K).float()
+    
+    err = (target_oh - p)**2
+    var = p * (1 - p) / (S + 1)
+    loss = torch.sum(err + var, dim=-1) # (Batch, T)
+    
+    kl_alpha = (alpha - 1) * (1 - target_oh) + 1
+    kl_div = torch.distributions.kl.kl_divergence(
+        torch.distributions.Dirichlet(kl_alpha),
+        torch.distributions.Dirichlet(torch.ones_like(kl_alpha))
+    )
+    
+    # Epoch에 따라 KL 강도 조절 (Annealing)
+    kl_weight = min(1.0, epoch / 10.0)
+    return loss + kl_weight * kl_div
 
-def concatenated_train_feedback(loader, model, optimizer, original_label, device):
+def concatenated_train_feedback(loader, model, optimizer, epoch, device):
     with torch.set_grad_enabled(True):
 
         model.train()
 
         losses = []
-        original_labels = original_label
         new_labels = []
 
         import time
         start = time.time()
+
+        u_threshold = max(0.1, 0.3 - (epoch * 0.01))
 
         for it, (input, soft) in enumerate(loader):
             if it==0:
@@ -150,18 +177,62 @@ def concatenated_train_feedback(loader, model, optimizer, original_label, device
             optimizer.zero_grad()
             # scores, feat_select_top, feat_select_low, top_select_score = model(input)
             scores = model(input)
-            scores = scores.flatten()
-            loss = loss_fn(scores, soft)
+
+            alpha = scores + 1
+            S = torch.sum(alpha, dim=-1)
+
+            u = 2.0 / S
+            confidence = 1.0 - u
+
+            hard_mask = (u < u_threshold)
+            soft_mask = ~hard_mask
+
+            hard_target = (soft > 0.5).long()
+            loss = torch.zeros_like(u)
+
+            # ---------- HARD LOSS ----------
+            if hard_mask.any():
+                loss_hard = evidential_loss(
+                    scores[hard_mask],
+                    hard_target[hard_mask],
+                    epoch
+                )
+                loss[hard_mask] = loss_hard
+
+            # ---------- SOFT LOSS ----------
+            if soft_mask.any():
+                # soft label → probability target
+                soft_target = torch.stack(
+                    [1.0 - soft, soft], dim=-1
+                )  # [B, T, 2]
+
+                prob = alpha / S.unsqueeze(-1)
+
+                # soft cross-entropy
+                loss_soft = -(soft_target[soft_mask] *
+                            torch.log(prob[soft_mask] + 1e-8)).sum(dim=-1)
+
+                loss[soft_mask] = loss_soft
+
+            # confidence-weighted self-paced loss
+            total_loss = torch.mean(loss * confidence)
+
+
+            #scores = scores.flatten()
+            #loss = loss_fn(scores, soft)
             # loss_sparse = sparsity(scores, 8e-3)
             # loss_smooth = smooth(scores, 8e-4)
-            total_loss = loss # + loss_sparse + loss_smooth
+            #total_loss = loss # + loss_sparse + loss_smooth
             
             losses.append(total_loss.cpu().detach().item())
-            trans = scores
+            #trans = scores
             # trans = torch.where(scores > 0.6, 1.0, 0.0)
             # trans = (scores + labels)/2
-            trans = trans.cpu().detach().numpy()
-            res = list(zip(soft.cpu().numpy(), trans))
+            #trans = trans.cpu().detach().numpy()
+            prob = (alpha[:, :, 1] / S.squeeze(-1)).detach().cpu().numpy()
+            refined_np = soft.detach().cpu().numpy()
+
+            res = list(zip(refined_np.flatten(), prob))
             new_labels += res
 
             total_loss.backward()

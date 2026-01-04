@@ -3,7 +3,7 @@ python mainv2.py \
     --optimizer SGD \
     --max-epoch 20 \
     --outer-epochs 1\
-    --batch-size 128 \
+    --batch-size 32 \
     --lr 0.001\
     --feature-size 2048 \
     --gt list/gt-ucf-RTFM.npy\

@@ -45,10 +45,11 @@ class Model_V2(nn.Module): # multiplication then Addition
 
         self.fc_att2 = nn.Sequential(nn.Linear(512, 32), nn.Softmax(dim = 1))
 
-        self.fc3 = nn.Linear(32, 1)
+        self.fc3 = nn.Linear(32, 2)
         self.dropout = nn.Dropout(0.6)
         self.relu = nn.ReLU()
-        self.sigmoid = nn.Sigmoid()
+
+        self.softplus = nn.Softplus()
         self.apply(weight_init)
 
 
@@ -77,12 +78,12 @@ class Model_V2(nn.Module): # multiplication then Addition
         x = self.relu(x)
         x = self.dropout(x)
 
-        x = self.sigmoid(self.fc3(x))
+        x = self.softplus(self.fc3(x))
 
         #지금 32개의 segment 축 평균을 계산해서 segment level anomaly score 가 아닌 (128,10,1) crop level 점수를 내고있었음.
         #x = x.mean(dim = 1) 
 
         if len(orig_shape) == 3:
-            x = x.reshape(B,T,1)
+            x = x.reshape(B,T,2)
 
         return x
