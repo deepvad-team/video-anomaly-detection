@@ -80,8 +80,7 @@ def test(dataloader, model, args, device):
             logits = model(inputs=x)                 # (1,T,1)
             logits = logits.squeeze(0).squeeze(-1)   # (T,)
 
-            prob = torch.sigmoid(logits)
-            pred = prob.detach().cpu().numpy()
+            pred = logits.detach().cpu().numpy()
 
             T = pred.shape[0]
             pred_frame = np.repeat(pred, 16)         # (T*16,)
@@ -126,8 +125,8 @@ def test(dataloader, model, args, device):
     assert ptr == total_frames, (ptr, total_frames)
     print("ptr ok:", ptr)
 
-    np.save('precision.npy', precision)
-    np.save('recall.npy', recall)
+    #np.save('precision.npy', precision)
+    #np.save('recall.npy', recall)
 
 
     # np.save('UCF_pred/'+'{}-pred_UCFV1_i3d.npy'.format(epoch), pred)
