@@ -61,7 +61,7 @@ def test(dataloader, model, args, device):
 def test(dataloader, model, args, device):
     model.eval()
     gt_all = np.load(args.gt, allow_pickle=True)
-    print("gt_all shape:", gt_all.shape, "dtype:", gt_all.dtype)
+    #print("gt_all shape:", gt_all.shape, "dtype:", gt_all.dtype)
     assert gt_all.ndim == 1, f"gt_all must be 1D frame array, got shape {gt_all.shape}, dtype={gt_all.dtype}"
 
     ptr = 0

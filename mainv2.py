@@ -30,8 +30,16 @@ if __name__ == '__main__':
     print('mainv2')
     args = option.parser.parse_args()
     set_seed(42)
+    
 
     len_N, original_lables  = Concat_list_all_crop_feedback(Test=False, create='False')
+
+    #추가 - UCF_conf_score.npy 불러오기
+    conf_np = np.load(args.conffile).astype(np.float32)
+    conf_all = torch.from_numpy(conf_np).float().cuda()
+    assert conf_all.shape[0] == original_lables.shape[0], \
+        f"conf length {conf_all.shape[0]} != hard length {original_lables.shape[0]}"
+
 
     wandb.login()
     wandb.init(project="Unsupervised Anomaly Detection", config=args)
@@ -69,7 +77,7 @@ if __name__ == '__main__':
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Number of parameters: {total_params}")
     
-    optimizer = optim.SGD(model.parameters(), lr=0.01, weight_decay=5e-4, momentum=0.9, nesterov=True)
+    optimizer = optim.SGD(model.parameters(), lr=0.001, weight_decay=5e-4, momentum=0.9, nesterov=True)
     scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[15, 25], gamma=0.1)
     
     auc, ap = test(test_loader, model, args, device)
@@ -85,7 +93,8 @@ if __name__ == '__main__':
     test_info = {"epoch": [], "test_auc": []}
 
     for epoch in tqdm(range(1, args.max_epoch + 1), total=args.max_epoch, dynamic_ncols=True):
-        loss, lls = concatenated_train_feedback(train_loader, model, optimizer,original_lables, device )
+        #변경 (conf_all & epoch 추가)
+        loss, lls = concatenated_train_feedback(train_loader, model, optimizer,original_lables, conf_all, device, epoch)
         auc, ap = test(test_loader, model, args, device)
         if auc > best_auc:
             best_auc = auc

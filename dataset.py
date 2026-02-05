@@ -19,9 +19,7 @@ class Dataset_Con_all_feedback_XD(data.Dataset):
 
             self.con_all = Concat_list_all_crop_feedback(True)
         else:
-            
-
-            
+      
             #self.con_all = np.load("concatenated/concat_UCF.npy")
             self.con_all = np.memmap('concat_UCF.npy', dtype='float32', mode='r', shape=(1610, 32, 10, 2048)).copy()
             # self.con_all = np.load("concatenated/concat_XD.npy")
@@ -81,10 +79,10 @@ class UCFTrainSnippetDataset(data.Dataset):
         #x = torch.from_numpy(x)                            # CPU float32
 
         # idx는 original_labels(=CUDA tensor)에서 바로 인덱싱 되도록 CUDA LongTensor로 반환 (num_workers=0이면 안전)
-        soft = torch.tensor(self.pseudo[idx], dtype=torch.float32)
+        #soft = torch.tensor(self.pseudo[idx], dtype=torch.float32)
 
 
-        return x, soft
+        return x, idx
 
 
 class UCFTestVideoDataset(data.Dataset):

@@ -29,7 +29,8 @@ parser.add_argument('--windowsize',type=float,  default=0.09, help='lr_scheduler
 parser.add_argument('--modelversion',type=str,  default='Model_V2', help='Model version')
 parser.add_argument('--eps2',type=float,  default=0.4, help='lr_scheduler stepsize')
 parser.add_argument('--outer-epochs',type=int,  default=1, help='lr_scheduler stepsize')
-parser.add_argument('--pseudofile',type=str,  default='UCF_unsup_labels_original_V2', help='ground truth file')
+parser.add_argument('--pseudofile',type=str,  default='UCF_hard_label', help='ground truth file')
+parser.add_argument('--conffile', type=str, required=True)
 parser.add_argument('--conall',type=str,  default='concat_UCF', help='ground truth file')
 
 # mainv2.py 내부에 추가

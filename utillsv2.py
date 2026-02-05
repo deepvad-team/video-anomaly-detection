@@ -38,6 +38,6 @@ def Concat_list_all_crop_feedback(Test=False, create='False'): #UCF
         label_all = np.load(args.pseudofile)
 
         print('[*] concatenated labels shape:',label_all.shape)
-
-        return len(label_all), torch.tensor(label_all).cuda()
+        labels = torch.from_numpy(label_all).long().cuda()
+        return len(label_all), labels
 
