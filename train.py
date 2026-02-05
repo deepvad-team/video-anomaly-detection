@@ -170,14 +170,16 @@ def concatenated_train_feedback(loader, model, optimizer, hard_all, conf_all, de
             t = min(1.0, (epoch-1) / max(1, warm-1))
             p = p0 + (p1-p0) * t
             
+            
             #k = max(1, int(p*conf_base.numel()))
             #thr = torch.topk(conf_base, k, largest=True).values.min()
-
             #mask = base & (conf >= thr)
+
             mask = torch.zeros_like(base, dtype=torch.bool)
 
             # abnormal(1): top-k (conf 큰 것)
             pos = base & (hard == 1)
+            '''
             k_pos = 0
             if pos.any():
                 cpos = conf[pos]
@@ -185,14 +187,18 @@ def concatenated_train_feedback(loader, model, optimizer, hard_all, conf_all, de
                 k_pos = min(k_pos, cpos.numel())
                 thr = torch.topk(cpos, k_pos, largest=True).values.min()
                 mask[pos] = (conf[pos] >= thr)
+            '''
+            # pos 전부 사용
+            mask[pos] = True
+            k_pos = pos.sum().item()
 
             # normal(0): bottom-k (conf 작은 것)  <-- 핵심
             neg = base & (hard == 0)
             if neg.any() and k_pos > 0:
                 cneg = conf[neg]
                 r = 2
-                #k_neg = max(1, int(p * cneg.numel()))
-                k_neg = min(int(r*k_pos), cneg.numel()) #pos의 2배개까지로 제한
+                k_neg = max(1, int(p * cneg.numel()))
+                k_neg = min(k_neg, int(r*k_pos), cneg.numel()) #pos의 '2배'개까지로 제한
                 thr = torch.topk(cneg, k_neg, largest=False).values.max()  # bottom-k의 최대값
                 mask[neg] = (conf[neg] <= thr)
 
