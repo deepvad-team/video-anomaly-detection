@@ -18,7 +18,7 @@ args = option.parser.parse_args()
 
 
 
-def Concat_list_all_crop_feedback(Test=False, create='False'): #UCF
+def Concat_list_all_crop_feedback(Test=False, create='False'): #UCF (지금 이거 안쓰고 있음)
     from datetime import datetime
 
     now = datetime.now()

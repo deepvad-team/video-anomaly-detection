@@ -89,6 +89,7 @@ class UCFTestVideoDataset(data.Dataset):
     def __init__(self, conall_path, nalist_path):
         self.nalist = np.load(nalist_path)                 # (290,2)
         self.total_T = int(self.nalist[-1, 1])
+        print("total_T from code:", int(self.nalist[-1,1]))
         self.con_all = np.memmap(conall_path, dtype="float32", mode="r",
                                  shape=(self.total_T, 10, 2048))
 
