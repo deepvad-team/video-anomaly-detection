@@ -5,13 +5,12 @@ python test.py \
     --outer-epochs 1\
     --batch-size 128 \
     --lr 0.01\
-    --feature-size 1024 \
-    --gt list/gt-ucf-RTFM.npy\
-    --create True\
+    --feature-size 2048 \
+    --gt ../../C2FPL/list/gt-ucf-RTFM.npy\
     --datasetname UCF \
     --windowsize 0.15\
     --eps 0.225 \
     --eps2 1.32475  \
-    --pseudofile Unsup_labels/UCF_unsup_labels_original_New_V88_1.5.npy\
+    --pseudofile ../../C2FPL/Unsup_labels/UCF_unsup_labels_original_New_V88_1.5.npy\
     --conall concat_UCF\
  

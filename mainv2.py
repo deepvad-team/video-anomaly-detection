@@ -8,12 +8,11 @@ from train import concatenated_train, concatenated_train_feedback
 from test import test
 import option
 from tqdm import tqdm
-
 import os
 import numpy as np
 import wandb
 import copy
-torch.set_default_tensor_type('torch.cuda.FloatTensor')
+#torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
 
 if __name__ == '__main__':
@@ -21,6 +20,7 @@ if __name__ == '__main__':
     args = option.parser.parse_args()
 
     len_N, original_lables  = Concat_list_all_crop_feedback(Test=False, create='False')
+
     wandb.login()
     wandb.init(project="Unsupervised Anomaly Detection", config=args)
 
@@ -28,25 +28,21 @@ if __name__ == '__main__':
                             batch_size=args.batch_size, shuffle=False, 
                             num_workers=args.workers, pin_memory=False, drop_last=False)
     
-    
     train_loader = DataLoader(Dataset_Con_all_feedback_XD(args, test_mode=False, is_normal=True), 
                                 batch_size=args.batch_size, shuffle=True, 
                                 num_workers=args.workers, pin_memory=False)
     
     model = Model_V2(args.feature_size)
-
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Number of parameters: {total_params}")
+    print(f"Number of parameters: {total_params}") 
     if not os.path.exists('./ckpt'):
-        os.makedirs('./ckpt')
-    
+        os.makedirs('./ckpt')    
     
     optimizer = optim.SGD(model.parameters(), lr=0.01, weight_decay=5e-4, momentum=0.9, nesterov=True)
     scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[15, 25], gamma=0.1)
-
     test_info = {"epoch": [], "test_auc": []}
 
     auc, ap = test(test_loader, model, args, device)
