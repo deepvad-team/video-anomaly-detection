@@ -22,13 +22,13 @@ parser.add_argument('--max-epoch', type=int, default=30, help='maximum iteration
 parser.add_argument('--optimizer', default='SGD', help='Number of segments of each video')
 parser.add_argument('--lossfn', default='BCE', help='Number of segments of each video')
 parser.add_argument('--stepsize',type=int,  default=5, help='lr_scheduler stepsize')
-parser.add_argument('--pseudo',type=str,  default='Unsup_labels/UCF_unsup_labels_original_V2.npy', help='pseudo labels')
+parser.add_argument('--pseudo',type=str,  default='Unsup_labels/UCF_labels_org.npy', help='pseudo labels')
 
 
 parser.add_argument('--windowsize',type=float,  default=0.09, help='lr_scheduler stepsize')
 parser.add_argument('--modelversion',type=str,  default='Model_V2', help='Model version')
 parser.add_argument('--eps2',type=float,  default=0.4, help='lr_scheduler stepsize')
 parser.add_argument('--outer-epochs',type=int,  default=1, help='lr_scheduler stepsize')
-parser.add_argument('--pseudofile',type=str,  default='UCF_unsup_labels_original_V2', help='ground truth file')
+parser.add_argument('--pseudofile',type=str,  default='UCF_labels_org', help='ground truth file')
 parser.add_argument('--conall',type=str,  default='concat_UCF', help='ground truth file')
 
