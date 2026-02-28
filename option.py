@@ -32,3 +32,5 @@ parser.add_argument('--outer-epochs',type=int,  default=1, help='lr_scheduler st
 parser.add_argument('--pseudofile',type=str,  default='UCF_labels_org', help='ground truth file')
 parser.add_argument('--conall',type=str,  default='concat_UCF', help='ground truth file')
 
+
+parser.add_argument('--xd_feat', type=str, required=True, help='path to XD feature npy, shape=(145649,1024)')

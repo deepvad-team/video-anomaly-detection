@@ -3,7 +3,7 @@ import torch.optim as optim
 import torch
 from utillsv2 import Concat_list_all_crop_feedback
 from model import Model, Model_V2
-from dataset import  Dataset_Con_all_feedback_XD
+from dataset import  Dataset_Con_all_feedback_UCF
 from train import concatenated_train, concatenated_train_feedback
 from test import test
 import option
@@ -51,11 +51,11 @@ if __name__ == '__main__':
     final_path = f'unsupervised_ckpt/{args.datasetname}_final_{ts}_{run_id}.pkl'
 
 
-    test_loader = DataLoader(Dataset_Con_all_feedback_XD(args, test_mode=True), 
+    test_loader = DataLoader(Dataset_Con_all_feedback_UCF(args, test_mode=True), 
                             batch_size=args.batch_size, shuffle=False, 
                             num_workers=args.workers, pin_memory=False, drop_last=False)
     
-    train_loader = DataLoader(Dataset_Con_all_feedback_XD(args, test_mode=False, is_normal=True), 
+    train_loader = DataLoader(Dataset_Con_all_feedback_UCF(args, test_mode=False, is_normal=True), 
                                 batch_size=args.batch_size, shuffle=True, 
                                 num_workers=args.workers, pin_memory=False)
     

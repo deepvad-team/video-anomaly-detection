@@ -9,6 +9,7 @@ def weight_init(m):
         torch_init.xavier_uniform_(m.weight)
         if m.bias is not None:
             m.bias.data.fill_(0)
+   
 
 class Model(nn.Module):
     def _init_(self, n_features):
@@ -33,6 +34,7 @@ class Model(nn.Module):
 class Model_V2(nn.Module): # multiplication then Addition
     def __init__(self, n_features):
         super(Model_V2, self).__init__()
+
         self.fc1 = nn.Linear(n_features, 512)
         self.fc_att1 = nn.Sequential(nn.Linear(n_features, 512), nn.Softmax(dim = 1))
         self.fc2 = nn.Linear(512, 32)
@@ -43,13 +45,27 @@ class Model_V2(nn.Module): # multiplication then Addition
         self.sigmoid = nn.Sigmoid()
         self.apply(weight_init)
 
-    def forward(self, inputs):
+    def forward(self, inputs, return_logits=False): #변경 (추가) 부분: return_logits 받음
+
         x = self.fc1(inputs)
         x = self.relu(x)
         x = self.dropout(x)
         x = self.fc2(x)
         x = self.relu(x)
         x = self.dropout(x)
-        x = self.sigmoid(self.fc3(x))
-        x = x.mean(dim = 1)
-        return x
+
+        #변경 (추가) 부분: sigmoid 통과 전 logits 도 반환
+        logits = self.fc3(x)  # (N, 1) OR (N, 10, 1) depending on input
+        prob = self.sigmoid(logits) 
+
+        if prob.dim() > 2:
+            prob_out = prob.mean(dim=1)  #10crop이면 평균내주기
+            logits_out = logits.mean(dim=1)
+        else:
+            prob_out = prob
+            logits_out = logits
+        
+        if return_logits:
+            return prob_out, logits_out
+
+        return prob_out

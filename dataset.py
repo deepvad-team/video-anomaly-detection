@@ -8,7 +8,7 @@ import option
 
 args = option.parser.parse_args()
 
-class Dataset_Con_all_feedback_XD(data.Dataset):
+class Dataset_Con_all_feedback_UCF(data.Dataset):
     def __init__(self, args, is_normal=True, transform=None, test_mode=False):
         #변경(추가) -- modality 인자 안 받고 있음.
         if not hasattr(args, "modality"):
@@ -48,3 +48,37 @@ class Dataset_Con_all_feedback_XD(data.Dataset):
 
     def __len__(self):
         return len(self.con_all)   
+
+
+
+class Dataset_Con_all_feedback_XD(data.Dataset):
+    def __init__(self, args, is_normal=True, transform=None, test_mode=False):
+        self.is_normal = is_normal
+        self.transform = transform
+        self.test_mode = test_mode
+        nalist = np.load('list/nalist_XD_test.npy')
+        self.total_T = int(nalist[-1,1])
+
+
+        if test_mode:
+            # XD test feature: shape = (145649, 1024)
+            self.con_all = np.memmap(args.xd_feat, dtype="float32", mode="r", shape=(self.total_T, 1024))
+            print('[XD test] self.con_all shape:', self.con_all.shape)
+
+            assert self.con_all.ndim == 2, f"Expected 2D array, got {self.con_all.shape}"
+            assert self.con_all.shape[1] == 1024, f"Expected feature dim 1024, got {self.con_all.shape[1]}"
+
+        else:
+            raise NotImplementedError("지금은 XD test_mode=True만.")
+
+    def __getitem__(self, index):
+        features = self.con_all[index]
+        features = np.array(features, dtype=np.float32)   # (1024,)
+
+        if self.test_mode:
+            return features
+        else:
+            return features, index
+
+    def __len__(self):
+        return len(self.con_all)
