@@ -60,6 +60,19 @@ def test(dataloader, model, args, device):
     '''
 def test(dataloader, model, args, device):
     model.eval()
+
+    print(f"GT path: {args.gt}")
+    gt_all = np.load(args.gt, allow_pickle=True)
+    print(f"GT shape: {gt_all.shape}, dtype: {gt_all.dtype}")
+    print(f"GT first 10 values: {gt_all[:10]}")
+    
+    # Dataloader 정보
+    print(f"Number of test videos: {len(dataloader)}")
+    for i, x in enumerate(dataloader):
+        print(f"Video {i} input shape: {x.shape}")
+        if i >= 2:  # 처음 3개만
+            break
+
     gt_all = np.load(args.gt, allow_pickle=True)
     print("gt_all shape:", gt_all.shape, "dtype:", gt_all.dtype)
     assert gt_all.ndim == 1, f"gt_all must be 1D frame array, got shape {gt_all.shape}, dtype={gt_all.dtype}"
@@ -77,8 +90,13 @@ def test(dataloader, model, args, device):
             if x.dim() == 2:
                 x = x.unsqueeze(0)
 
-            logits = model(inputs=x)                 # (1,T,1)
-            logits = logits.squeeze(0).squeeze(-1)   # (T,)
+            logits = model(inputs=x, return_uncertainty=False)
+            if isinstance(logits, dict):
+                logits = logits['anomaly_score']
+
+            #print(f"logits type: {type(logits)}, shape: {logits.shape if hasattr(logits, 'shape') else 'no shape'}")
+
+            logits = logits.squeeze(0).squeeze(-1)
 
             pred = logits.detach().cpu().numpy()
 

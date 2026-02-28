@@ -23,7 +23,7 @@ class Dataset_Con_all_feedback_XD(data.Dataset):
 
             
             #self.con_all = np.load("concatenated/concat_UCF.npy")
-            self.con_all = np.memmap('concat_UCF.npy', dtype='float32', mode='r', shape=(1610, 32, 10, 2048)).copy()
+            self.con_all = np.memmap('../C2FPL/concat_UCF.npy', dtype='float32', mode='r', shape=(1610, 32, 10, 2048)).copy()
             # self.con_all = np.load("concatenated/concat_XD.npy")
             self.con_all = np.array(self.con_all).reshape(1610, 32, 10, 2048)
 
