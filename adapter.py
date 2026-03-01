@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 class CopyPlusExtraAdapter(nn.Module):
-    def __init__(self, d=1024, use_ln=False):
+    def __init__(self, d=1024, use_ln=True):
         super().__init__()
         self.extra = nn.Linear(d, d, bias=False)
         nn.init.zeros_(self.extra.weight)   # 처음엔 extra(x)=0

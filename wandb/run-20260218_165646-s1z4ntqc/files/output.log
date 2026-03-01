@@ -1,0 +1,13 @@
+Testset size: (69634, 10, 2048)
+self.con_all shape: (779951, 10, 2048)
+Number of parameters: 2131041
+auc: 0.46298402222819607
+epcoh 0 auc =  0.46298402222819607
+init best_auc: 0.46298402222819607 -> unsupervised_ckpt/UCF_best_20260218_165650_s1z4ntqc.pkl
+  0%|                                                                                                                                           | 0/20 [01:24<?, ?it/s]
+Traceback (most recent call last):
+  File "C:\Users\jplabuser\C2FPL_EVAL\C2FPL\mainv2.py", line 85, in <module>
+    loss, lls = concatenated_train_feedback(train_loader, model, optimizer,original_lables, device )
+  File "C:\Users\jplabuser\C2FPL_EVAL\C2FPL\train.py", line 122, in concatenated_train_feedback
+    losses.append(total_loss.cpu().detach().numpy())
+KeyboardInterrupt

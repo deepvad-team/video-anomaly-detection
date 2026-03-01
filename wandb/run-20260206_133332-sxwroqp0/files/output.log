@@ -1,0 +1,76 @@
+Testset size: (69634, 10, 2048)
+self.con_all shape: (779951, 10, 2048)
+Number of parameters: 2131041
+auc: 0.45178107673416124
+epcoh 0 auc =  0.45178107673416124
+ 30%|██████████████████████████████████████▍                                                                                         | 6/20 [47:57<1:53:55, 488.26s/it]
+445.3223259449005
+auc: 0.37586694054630754
+
+Epoch 1/20, LR: 0.0100 auc: 0.3759, ap: 0.0566, loss: 0.1784
+
+442.82895493507385
+auc: 0.36030466102320163
+
+Epoch 2/20, LR: 0.0100 auc: 0.3603, ap: 0.0542, loss: 0.1482
+
+434.72276759147644
+auc: 0.3980679283227889
+
+Epoch 3/20, LR: 0.0100 auc: 0.3981, ap: 0.0581, loss: 0.1387
+
+441.036527633667
+auc: 0.3977008732025677
+
+Epoch 4/20, LR: 0.0100 auc: 0.3977, ap: 0.0580, loss: 0.1339
+
+445.87387919425964
+auc: 0.3902337274302638
+
+Epoch 5/20, LR: 0.0100 auc: 0.3902, ap: 0.0577, loss: 0.1305
+
+488.8361487388611
+auc: 0.4238672591497792
+
+Epoch 6/20, LR: 0.0100 auc: 0.4239, ap: 0.0621, loss: 0.1282
+
+474.62329292297363
+auc: 0.4129666980240314
+
+Epoch 7/20, LR: 0.0100 auc: 0.4130, ap: 0.0609, loss: 0.1267
+
+473.1624608039856
+auc: 0.3918818978415819
+
+Epoch 8/20, LR: 0.0100 auc: 0.3919, ap: 0.0581, loss: 0.1252
+
+472.6867365837097
+auc: 0.4299505523174647
+
+Epoch 9/20, LR: 0.0100 auc: 0.4300, ap: 0.0628, loss: 0.1245
+
+474.74936509132385
+auc: 0.37430273027820465
+
+Epoch 10/20, LR: 0.0100 auc: 0.3743, ap: 0.0561, loss: 0.1238
+
+473.9464952945709
+auc: 0.41476514453198027
+
+Epoch 11/20, LR: 0.0100 auc: 0.4148, ap: 0.0612, loss: 0.1232
+Traceback (most recent call last):
+  File "C:\Users\jplabuser\C2FPL_EVAL\C2FPL\mainv2.py", line 57, in <module>
+    loss, lls = concatenated_train_feedback(train_loader, model, optimizer,original_lables, device )
+  File "C:\Users\jplabuser\C2FPL_EVAL\C2FPL\train.py", line 136, in concatenated_train_feedback
+    for _, (input, idx) in enumerate(loader):
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\dataloader.py", line 701, in __next__
+    data = self._next_data()
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\dataloader.py", line 757, in _next_data
+    data = self._dataset_fetcher.fetch(index)  # may raise StopIteration
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\_utils\fetch.py", line 52, in fetch
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\_utils\fetch.py", line 52, in <listcomp>
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+  File "C:\Users\jplabuser\C2FPL_EVAL\C2FPL\dataset.py", line 47, in __getitem__
+    features = np.array(features, dtype=np.float32)
+KeyboardInterrupt

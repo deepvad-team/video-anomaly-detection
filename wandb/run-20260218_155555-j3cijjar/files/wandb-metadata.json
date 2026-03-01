@@ -1,0 +1,64 @@
+{
+  "os":  "Windows-10-10.0.26100-SP0",
+  "python":  "CPython 3.9.25",
+  "startedAt":  "2026-02-18T06:55:55.200823Z",
+  "args":  [
+    "--lossfn",
+    "BCE",
+    "--optimizer",
+    "SGD",
+    "--max-epoch",
+    "20",
+    "--outer-epochs",
+    "1",
+    "--batch-size",
+    "128",
+    "--lr",
+    "0.001",
+    "--feature-size",
+    "2048",
+    "--gt",
+    "list/gt-ucf-RTFM.npy",
+    "--datasetname",
+    "UCF",
+    "--pseudofile",
+    "Unsup_labels/UCF_labels_org.npy",
+    "--conall",
+    "concat_UCF"
+  ],
+  "program":  "C:\\Users\\jplabuser\\C2FPL_EVAL\\C2FPL\\mainv2.py",
+  "codePath":  "mainv2.py",
+  "codePathLocal":  "mainv2.py",
+  "git":  {
+    "remote":  "https://github.com/deepvad-team/video-anomaly-detection.git",
+    "commit":  "64e37250c84e6c7a870efca50285e7680ccf7dc0"
+  },
+  "email":  "nayoung.kim.it@gmail.com",
+  "root":  "C:\\Users\\jplabuser\\C2FPL_EVAL\\C2FPL",
+  "host":  "DESKTOP-56JKG4",
+  "executable":  "C:\\Users\\jplabuser\\anaconda3\\envs\\c2fpl\\python.exe",
+  "cpu_count":  6,
+  "cpu_count_logical":  12,
+  "gpu":  "NVIDIA GeForce RTX 3060",
+  "gpu_count":  1,
+  "disk":  {
+    "/":  {
+      "total":  "499091763200",
+      "used":  "485173899264"
+    }
+  },
+  "memory":  {
+    "total":  "16984231936"
+  },
+  "gpu_nvidia":  [
+    {
+      "name":  "NVIDIA GeForce RTX 3060",
+      "memoryTotal":  "12884901888",
+      "cudaCores":  3584,
+      "architecture":  "Ampere",
+      "uuid":  "GPU-9a0f6584-ceb0-22d3-a76f-e07c1e91b17a"
+    }
+  ],
+  "cudaVersion":  "12.6",
+  "writerId":  "8km55zq6mjmt1wx0k9rzsptbv8ess5h5"
+}

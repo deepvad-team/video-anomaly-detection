@@ -1,6 +1,8 @@
 import matplotlib.pyplot as plt
 import torch
+import torch.nn.functional as F
 from sklearn.metrics import auc, roc_curve, precision_recall_curve
+from sklearn.metrics import roc_auc_score, average_precision_score
 import numpy as np
 from dataset import  Dataset_Con_all_feedback_UCF, Dataset_Con_all_feedback_XD
 from torch.utils.data import DataLoader
@@ -11,6 +13,7 @@ import os
 from model import Model, Model_V2
 from adapter import CopyPlusExtraAdapter
 # from datasets.dataset import 
+import copy
 
 #UCF
 def test(dataloader, model, args, device):
@@ -108,7 +111,9 @@ def test_2(dataloader, model, adapter, args, device):
 
 
 
-
+# ---------------------------
+# Video diagnostics
+# ---------------------------
 
 def run_one_video(X_flat, nalist, vid_idx, adapter, model, device):
     s, e = nalist[vid_idx]
@@ -162,185 +167,715 @@ def get_video_scores_and_mask(X_flat, nalist, vid_idx, adapter, model, device, q
         "mask": mask,                   # (T_i,) bool
         "num_selected": int(mask.sum().item())
     }
-import numpy as np
-import torch
 
-def diagnose_xd_baseline(
-    X_flat,          # numpy array, shape: (total_T, 1024)
-    nalist,          # numpy array, shape: (num_videos, 2), [start, end)
-    gt,              # numpy array, shape: (total_T,) or (total_T*16,)
+
+def inspect_video_energy_terms(
+    X_flat,
+    nalist,
+    vid_idx,
     adapter,
     model,
     device,
-    frame_repeat=16,
-    topk=5
+    q=0.2,              # 하위 20%만 normal 후보
+    min_keep=8,         # 너무 적으면 skip
+    sgld_steps=10,
+    sgld_lr=0.05,
+    sgld_noise=0.01,
 ):
     """
-    baseline sanity check:
-    - segment gt or frame gt를 자동 처리
-    - 비디오별 mean/max/topk_mean score 계산
-    - normal / abnormal 분리 정도 출력
+    비디오 1개에 대해:
+    1) baseline prob/logit 계산
+    2) low-score normal 후보 선택
+    3) E_real 계산
+    4) SGLD로 x_tilde 생성
+    5) E_fake 계산
     """
 
-    total_T = X_flat.shape[0]
+    s, e = nalist[vid_idx]
+    x_video = X_flat[s:e]  # (T_i, 1024)
+    x_video = torch.from_numpy(x_video).float().to(device)
 
-    # 1) GT를 segment-level로 맞추기
+    model.eval()
+    adapter.eval()
+
+    # 1) baseline score 계산
+    with torch.no_grad():
+        x_2048 = adapter(x_video)                         # (T_i, 2048)
+        prob, logit = model(x_2048, return_logits=True)  # (T_i,1), (T_i,1)
+
+    prob = prob.squeeze(-1)     # (T_i,)
+    logit = logit.squeeze(-1)   # (T_i,)
+
+    # 2) normal 후보 선택: anomaly score 낮은 것들
+    thresh = torch.quantile(prob, q)
+    mask = prob <= thresh
+    num_selected = int(mask.sum().item())
+
+    print(f"[video {vid_idx}] start={s}, end={e}, T={e-s}")
+    print(f"threshold={thresh.item():.6f}, selected={num_selected}")
+
+    if num_selected < min_keep:
+        print(f"Too few selected segments (< {min_keep}). Skip.")
+        return None
+
+    x_sel = x_video[mask].detach()     # (N,1024)
+    prob_sel = prob[mask].detach()
+    logit_sel = logit[mask].detach()
+
+    # 3) real energy
+    #    energy = softplus(logit) : normal이면 작고 anomaly면 큼
+    E_real = F.softplus(logit_sel).mean()
+
+    print(f"E_real = {E_real.item():.6f}")
+    print(f"selected prob mean = {prob_sel.mean().item():.6f}")
+    print(f"selected logit mean = {logit_sel.mean().item():.6f}")
+
+    # 4) SGLD로 x_tilde 만들기
+    #    x_sel 주변에서 시작
+    x_tilde = (x_sel + sgld_noise * torch.randn_like(x_sel)).detach()
+
+    for step in range(sgld_steps):
+        x_tilde.requires_grad_(True)
+
+        x_tilde_2048 = adapter(x_tilde)
+        _, logit_tilde = model(x_tilde_2048, return_logits=True)
+        logit_tilde = logit_tilde.squeeze(-1)
+
+        E_tilde_now = F.softplus(logit_tilde).mean()
+
+        grad = torch.autograd.grad(E_tilde_now, x_tilde, create_graph=False)[0]
+
+        with torch.no_grad():
+            x_tilde = x_tilde - (sgld_lr / 2.0) * grad + sgld_noise * torch.randn_like(x_tilde)
+
+        x_tilde = x_tilde.detach()
+
+    # 5) 최종 fake energy
+    with torch.no_grad():
+        x_tilde_2048 = adapter(x_tilde)
+        prob_fake, logit_fake = model(x_tilde_2048, return_logits=True)
+
+    prob_fake = prob_fake.squeeze(-1)
+    logit_fake = logit_fake.squeeze(-1)
+
+    E_fake = F.softplus(logit_fake).mean()
+
+    print(f"E_fake = {E_fake.item():.6f}")
+    print(f"fake prob mean = {prob_fake.mean().item():.6f}")
+    print(f"fake logit mean = {logit_fake.mean().item():.6f}")
+
+    return {
+        "vid_idx": vid_idx,
+        "start": int(s),
+        "end": int(e),
+        "T": int(e - s),
+        "threshold": float(thresh.item()),
+        "num_selected": num_selected,
+        "E_real": float(E_real.item()),
+        "E_fake": float(E_fake.item()),
+        "prob_mean": float(prob.mean().item()),
+        "prob_sel_mean": float(prob_sel.mean().item()),
+        "prob_fake_mean": float(prob_fake.mean().item()),
+    }
+
+
+# ---------------------------
+# TEA
+# ---------------------------
+
+def tea_one_video_one_step(
+    X_flat,
+    nalist,
+    vid_idx,
+    adapter,
+    model,
+    device,
+    q=0.2,
+    min_keep=8,
+    sgld_steps=10,
+    sgld_lr=0.05,
+    sgld_noise=0.01,
+    tea_lr=1e-3,
+):
+    """
+    비디오 1개에 대해:
+    - normal 후보 선택
+    - E_real / E_fake 계산
+    - adapter.ln 만 1 step update
+    - update 전/후 score 평균 비교
+    """
+
+    # detector는 freeze
+    model.eval()
+    for p in model.parameters():
+        p.requires_grad_(False)
+
+    # adapter 중 LN만 update
+    adapter.train()
+    for p in adapter.parameters():
+        p.requires_grad_(False)
+
+    if not hasattr(adapter, "ln"):
+        raise ValueError("adapter has no .ln ; use LayerNorm version adapter")
+
+    adapter.ln.weight.requires_grad_(True)
+    adapter.ln.bias.requires_grad_(True)
+
+    optimizer = torch.optim.Adam([adapter.ln.weight, adapter.ln.bias], lr=tea_lr)
+
+    s, e = nalist[vid_idx]
+    x_video = torch.from_numpy(X_flat[s:e]).float().to(device)
+
+    # update 전 baseline
+    with torch.no_grad():
+        x_2048_before = adapter(x_video)
+        prob_before, logit_before = model(x_2048_before, return_logits=True)
+
+    prob_before = prob_before.squeeze(-1)
+    logit_before = logit_before.squeeze(-1)
+
+    thresh = torch.quantile(prob_before, q)
+    mask = prob_before <= thresh
+
+    if int(mask.sum().item()) < min_keep:
+        print(f"[video {vid_idx}] too few selected segments. skip.")
+        return None
+
+    x_sel = x_video[mask].detach()
+
+    # -------- E_real --------
+    x_sel_2048 = adapter(x_sel)
+    _, logit_real = model(x_sel_2048, return_logits=True)
+    logit_real = logit_real.squeeze(-1)
+    E_real = F.softplus(logit_real).mean()
+
+    # -------- E_fake via SGLD --------
+    x_tilde = (x_sel + sgld_noise * torch.randn_like(x_sel)).detach()
+
+    # SGLD에서는 input grad 필요, adapter/model 파라미터 grad는 optimizer 대상만
+    for _ in range(sgld_steps):
+        x_tilde.requires_grad_(True)
+
+        x_tilde_2048 = adapter(x_tilde)
+        _, logit_tilde = model(x_tilde_2048, return_logits=True)
+        logit_tilde = logit_tilde.squeeze(-1)
+        E_tilde_now = F.softplus(logit_tilde).mean()
+
+        grad = torch.autograd.grad(E_tilde_now, x_tilde, create_graph=False)[0]
+
+        with torch.no_grad():
+            x_tilde = x_tilde - (sgld_lr / 2.0) * grad + sgld_noise * torch.randn_like(x_tilde)
+        x_tilde = x_tilde.detach()
+
+    x_tilde_2048 = adapter(x_tilde)
+    _, logit_fake = model(x_tilde_2048, return_logits=True)
+    logit_fake = logit_fake.squeeze(-1)
+    E_fake = F.softplus(logit_fake).mean()
+
+    # -------- TEA loss --------
+    loss = E_real - E_fake
+
+    optimizer.zero_grad(set_to_none=True)
+    loss.backward()
+    optimizer.step()
+
+    # update 후 baseline 다시 확인
+    adapter.eval()
+    with torch.no_grad():
+        x_2048_after = adapter(x_video)
+        prob_after, logit_after = model(x_2048_after, return_logits=True)
+
+    prob_after = prob_after.squeeze(-1)
+    logit_after = logit_after.squeeze(-1)
+
+    print(f"[video {vid_idx}]")
+    print(f" selected = {int(mask.sum().item())}")
+    print(f" E_real   = {E_real.item():.6f}")
+    print(f" E_fake   = {E_fake.item():.6f}")
+    print(f" loss     = {loss.item():.6f}")
+    print(f" prob mean before = {prob_before.mean().item():.6f}")
+    print(f" prob mean after  = {prob_after.mean().item():.6f}")
+
+    return {
+        "vid_idx": vid_idx,
+        "selected": int(mask.sum().item()),
+        "E_real": float(E_real.item()),
+        "E_fake": float(E_fake.item()),
+        "loss": float(loss.item()),
+        "prob_mean_before": float(prob_before.mean().item()),
+        "prob_mean_after": float(prob_after.mean().item()),
+    }
+
+
+# ---------------------------
+# TEA helper (episodic)
+# ---------------------------
+
+def _segment_gt_from_gt(gt, total_T, frame_repeat=16):
     gt = np.asarray(gt).astype(np.int64).reshape(-1)
 
     if len(gt) == total_T:
         seg_gt = gt
-        print(f"[GT] using segment-level GT directly: {seg_gt.shape}")
+        gt_mode = "segment"
     elif len(gt) == total_T * frame_repeat:
         seg_gt = gt.reshape(total_T, frame_repeat).max(axis=1)
-        print(f"[GT] converted frame-level GT -> segment-level GT: {seg_gt.shape}")
+        gt_mode = "frame"
     else:
         raise ValueError(
             f"GT length mismatch: len(gt)={len(gt)}, total_T={total_T}, "
-            f"expected either {total_T} or {total_T * frame_repeat}"
+            f"expected {total_T} or {total_T * frame_repeat}"
         )
+    return seg_gt, gt_mode
 
-    adapter.eval()
+
+def _tea_update_one_video(
+    x_video,          # torch tensor, (T_i, 1024)
+    adapter_episode,
+    model,
+    q=0.2,
+    min_keep=8,
+    sgld_steps=10,
+    sgld_lr=0.05,
+    sgld_noise=0.01,
+    tea_lr=1e-3,
+    tea_steps_per_video=1,
+):
+    """
+    비디오 하나에 대해 adapter_episode.ln만 업데이트.
+    return: adapter_episode (updated), debug_info
+    """
+
     model.eval()
+    for p in model.parameters():
+        p.requires_grad_(False)
 
-    stats = []
+    if not hasattr(adapter_episode, "ln"):
+        raise ValueError("adapter_episode must have .ln for LN-only TEA")
+
+    # adapter 전체 freeze, LN만 update
+    adapter_episode.train()
+    for p in adapter_episode.parameters():
+        p.requires_grad_(False)
+    adapter_episode.ln.weight.requires_grad_(True)
+    adapter_episode.ln.bias.requires_grad_(True)
+
+    optimizer = torch.optim.Adam(
+        [adapter_episode.ln.weight, adapter_episode.ln.bias],
+        lr=tea_lr
+    )
+
+    debug = []
+
+    for step_idx in range(tea_steps_per_video):
+        # 1) 현재 비디오 baseline score
+        with torch.no_grad():
+            x_2048 = adapter_episode(x_video)
+            prob, logit = model(x_2048, return_logits=True)
+
+        prob = prob.squeeze(-1)    # (T_i,)
+        logit = logit.squeeze(-1)  # (T_i,)
+
+        thresh = torch.quantile(prob, q)
+        mask = prob <= thresh
+        num_selected = int(mask.sum().item())
+
+        if num_selected < min_keep:
+            debug.append({
+                "step": step_idx,
+                "skipped": True,
+                "num_selected": num_selected,
+                "threshold": float(thresh.item()),
+            })
+            break
+
+        x_sel = x_video[mask].detach()      # (N,1024)
+        prob_sel = prob[mask].detach()
+        logit_sel = logit[mask].detach()
+
+        # 2) real energy
+        x_sel_2048 = adapter_episode(x_sel)
+        _, logit_real = model(x_sel_2048, return_logits=True)
+        logit_real = logit_real.squeeze(-1)
+        E_real = F.softplus(logit_real).mean()
+
+        # 3) SGLD fake 생성
+        x_tilde = (x_sel + sgld_noise * torch.randn_like(x_sel)).detach()
+
+        for _ in range(sgld_steps):
+            x_tilde.requires_grad_(True)
+
+            x_tilde_2048 = adapter_episode(x_tilde)
+            _, logit_tilde = model(x_tilde_2048, return_logits=True)
+            logit_tilde = logit_tilde.squeeze(-1)
+
+            E_tilde_now = F.softplus(logit_tilde).mean()
+
+            grad = torch.autograd.grad(E_tilde_now, x_tilde, create_graph=False)[0]
+
+            with torch.no_grad():
+                x_tilde = x_tilde - (sgld_lr / 2.0) * grad + sgld_noise * torch.randn_like(x_tilde)
+
+            x_tilde = x_tilde.detach()
+
+        x_tilde_2048 = adapter_episode(x_tilde)
+        _, logit_fake = model(x_tilde_2048, return_logits=True)
+        logit_fake = logit_fake.squeeze(-1)
+        E_fake = F.softplus(logit_fake).mean()
+
+        # 4) TEA loss = E_real - E_fake
+        loss = E_real - E_fake
+
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        optimizer.step()
+
+        debug.append({
+            "step": step_idx,
+            "skipped": False,
+            "num_selected": num_selected,
+            "threshold": float(thresh.item()),
+            "E_real": float(E_real.item()),
+            "E_fake": float(E_fake.item()),
+            "loss": float(loss.item()),
+            "prob_mean": float(prob.mean().item()),
+            "prob_sel_mean": float(prob_sel.mean().item()),
+            "logit_sel_mean": float(logit_sel.mean().item()),
+        })
+
+    return adapter_episode, debug
+
+# ---------------------------
+# 전체 xd evaluation용 함수
+# ---------------------------
+
+def eval_xd_with_episodic_tea(
+    X_flat,              # numpy, (total_T, 1024)
+    nalist,              # numpy, (num_videos, 2)
+    gt,                  # numpy, (total_T,) or (total_T*16,)
+    adapter,
+    model,
+    device,
+    frame_repeat=16,
+
+    use_tea=True,
+    q=0.2,
+    min_keep=8,
+    sgld_steps=10,
+    sgld_lr=0.05,
+    sgld_noise=0.01,
+    tea_lr=1e-3,
+    tea_steps_per_video=1,
+
+    verbose_every=100,
+):
+    """
+    XD 전체 test셋:
+    - 비디오별 adapter episodic reset
+    - optional TEA
+    - 최종 segment score 저장
+    - frame-level GT와 맞춰 AUC/AP 계산
+    """
+
+    total_T = X_flat.shape[0]
+    seg_gt, gt_mode = _segment_gt_from_gt(gt, total_T, frame_repeat=frame_repeat)
+
+    model.eval()
+    for p in model.parameters():
+        p.requires_grad_(False)
+
+    seg_scores_all = np.zeros(total_T, dtype=np.float32)
+    tea_logs = []
 
     for vid_idx in range(len(nalist)):
         s, e = nalist[vid_idx]
-        x_video = torch.from_numpy(X_flat[s:e]).float().to(device)   # (T_i, 1024)
+        x_video_np = X_flat[s:e]                            # (T_i,1024)
+        x_video = torch.from_numpy(x_video_np).float().to(device)
 
+        # 비디오마다 adapter 리셋
+        adapter_episode = copy.deepcopy(adapter).to(device)
+        adapter_episode.eval()
+
+        # 1) optional TEA
+        if use_tea:
+            adapter_episode, debug = _tea_update_one_video(
+                x_video=x_video,
+                adapter_episode=adapter_episode,
+                model=model,
+                q=q,
+                min_keep=min_keep,
+                sgld_steps=sgld_steps,
+                sgld_lr=sgld_lr,
+                sgld_noise=sgld_noise,
+                tea_lr=tea_lr,
+                tea_steps_per_video=tea_steps_per_video,
+            )
+        else:
+            debug = None
+
+        # 2) adaptation 후 최종 inference
+        adapter_episode.eval()
         with torch.no_grad():
-            x_2048 = adapter(x_video)                                # (T_i, 2048)
-            prob, logit = model(x_2048, return_logits=True)          # (T_i,1), (T_i,1)
+            x_2048 = adapter_episode(x_video)
+            prob, _ = model(x_2048, return_logits=True)
 
-        prob = prob.squeeze(-1).detach().cpu().numpy()               # (T_i,)
-        logit = logit.squeeze(-1).detach().cpu().numpy()             # (T_i,)
+        prob = prob.squeeze(-1).detach().cpu().numpy()     # (T_i,)
+        seg_scores_all[s:e] = prob
 
-        label = int(seg_gt[s:e].max() > 0)  # 비디오 내 하나라도 이상이면 abnormal video
+        if debug is not None:
+            tea_logs.append({
+                "vid_idx": vid_idx,
+                "start": int(s),
+                "end": int(e),
+                "T": int(e - s),
+                "debug": debug,
+            })
 
-        k = min(topk, len(prob))
-        topk_vals = np.sort(prob)[-k:]
+        if (vid_idx % verbose_every == 0) or (vid_idx == len(nalist) - 1):
+            print(f"[{vid_idx+1}/{len(nalist)}] done, T={e-s}")
 
-        stats.append({
-            "vid_idx": vid_idx,
-            "label": label,
-            "T": int(e - s),
-            "mean_prob": float(np.mean(prob)),
-            "max_prob": float(np.max(prob)),
-            "topk_mean": float(np.mean(topk_vals)),
-            "mean_logit": float(np.mean(logit)),
-            "max_logit": float(np.max(logit)),
-        })
+    # 3) metric 계산
+    if gt_mode == "segment":
+        y_true = seg_gt
+        y_score = seg_scores_all
+    else:
+        # segment score를 16배 반복해서 frame-level score로 맞춤
+        y_true = np.asarray(gt).reshape(-1)
+        y_score = np.repeat(seg_scores_all, frame_repeat)
 
-    # 2) 요약 출력
-    normal = [d for d in stats if d["label"] == 0]
-    abnormal = [d for d in stats if d["label"] == 1]
+    auc = roc_auc_score(y_true, y_score)
+    ap = average_precision_score(y_true, y_score)
 
-    def summarize(group, name):
-        if len(group) == 0:
-            print(f"\n[{name}] empty")
-            return
-        mean_probs = np.array([d["mean_prob"] for d in group])
-        max_probs = np.array([d["max_prob"] for d in group])
-        topk_means = np.array([d["topk_mean"] for d in group])
+    return {
+        "auc": float(auc),
+        "ap": float(ap),
+        "seg_scores_all": seg_scores_all,
+        "tea_logs": tea_logs,
+    }
 
-        print(f"\n[{name}] n={len(group)}")
-        print(f" mean_prob : {mean_probs.mean():.4f} ± {mean_probs.std():.4f}")
-        print(f" max_prob  : {max_probs.mean():.4f} ± {max_probs.std():.4f}")
-        print(f" topk_mean : {topk_means.mean():.4f} ± {topk_means.std():.4f}")
+import numpy as np
+from sklearn.metrics import roc_auc_score, average_precision_score
 
-    summarize(normal, "NORMAL")
-    summarize(abnormal, "ABNORMAL")
+def bootstrap_video_ci(
+    seg_scores_base,     # (total_T,)
+    seg_scores_tea,      # (total_T,)
+    nalist,              # (num_videos, 2)
+    gt,                  # (total_T,) or (total_T*16,)
+    frame_repeat=16,
+    n_boot=1000,
+    seed=42,
+):
+    rng = np.random.default_rng(seed)
 
-    # 3) 샘플 몇 개 보기
-    print("\n[ABNORMAL examples: high topk_mean]")
-    abnormal_sorted = sorted(abnormal, key=lambda x: x["topk_mean"], reverse=True)
-    for d in abnormal_sorted[:5]:
-        print(
-            f" vid={d['vid_idx']:4d} | T={d['T']:4d} | "
-            f"mean={d['mean_prob']:.4f} | max={d['max_prob']:.4f} | topk_mean={d['topk_mean']:.4f}"
+    total_T = len(seg_scores_base)
+    gt = np.asarray(gt).reshape(-1)
+
+    # GT 모드 정리
+    if len(gt) == total_T:
+        gt_mode = "segment"
+        seg_gt = gt.astype(np.int64)
+    elif len(gt) == total_T * frame_repeat:
+        gt_mode = "frame"
+        seg_gt = gt.reshape(total_T, frame_repeat).max(axis=1).astype(np.int64)
+    else:
+        raise ValueError(
+            f"GT length mismatch: len(gt)={len(gt)}, total_T={total_T}, "
+            f"expected {total_T} or {total_T*frame_repeat}"
         )
 
-    print("\n[NORMAL examples: high topk_mean]  <-- false alarm 많은 애들")
-    normal_sorted = sorted(normal, key=lambda x: x["topk_mean"], reverse=True)
-    for d in normal_sorted[:5]:
-        print(
-            f" vid={d['vid_idx']:4d} | T={d['T']:4d} | "
-            f"mean={d['mean_prob']:.4f} | max={d['max_prob']:.4f} | topk_mean={d['topk_mean']:.4f}"
-        )
+    num_videos = len(nalist)
 
-    return stats
+    delta_auc_list = []
+    delta_ap_list = []
+
+    for _ in range(n_boot):
+        # 비디오 인덱스 복원추출
+        boot_vids = rng.integers(0, num_videos, size=num_videos)
+
+        y_true_parts = []
+        y_base_parts = []
+        y_tea_parts = []
+
+        for vid_idx in boot_vids:
+            s, e = nalist[vid_idx]
+
+            if gt_mode == "segment":
+                y_true_parts.append(seg_gt[s:e])
+                y_base_parts.append(seg_scores_base[s:e])
+                y_tea_parts.append(seg_scores_tea[s:e])
+            else:
+                # frame-level metric과 맞추기 위해 segment score를 16번 반복
+                y_true_parts.append(gt[s*frame_repeat:e*frame_repeat])
+                y_base_parts.append(np.repeat(seg_scores_base[s:e], frame_repeat))
+                y_tea_parts.append(np.repeat(seg_scores_tea[s:e], frame_repeat))
+
+        y_true = np.concatenate(y_true_parts)
+        y_base = np.concatenate(y_base_parts)
+        y_tea = np.concatenate(y_tea_parts)
+
+        auc_base = roc_auc_score(y_true, y_base)
+        ap_base = average_precision_score(y_true, y_base)
+
+        auc_tea = roc_auc_score(y_true, y_tea)
+        ap_tea = average_precision_score(y_true, y_tea)
+
+        delta_auc_list.append(auc_tea - auc_base)
+        delta_ap_list.append(ap_tea - ap_base)
+
+    delta_auc = np.array(delta_auc_list)
+    delta_ap = np.array(delta_ap_list)
+
+    def ci95(x):
+        return np.percentile(x, [2.5, 50, 97.5])
+
+    auc_ci = ci95(delta_auc)
+    ap_ci = ci95(delta_ap)
+
+    print("[Bootstrap Δ = TEA - Baseline]")
+    print(f"ΔAUC median={auc_ci[1]:.6f}, 95% CI=({auc_ci[0]:.6f}, {auc_ci[2]:.6f})")
+    print(f"ΔAP  median={ap_ci[1]:.6f}, 95% CI=({ap_ci[0]:.6f}, {ap_ci[2]:.6f})")
+
+    return {
+        "delta_auc": delta_auc,
+        "delta_ap": delta_ap,
+        "auc_ci95": auc_ci,
+        "ap_ci95": ap_ci,
+    }
+
+# ---------------------------
+# Main test loop
+# ---------------------------
 
 if __name__ == '__main__':
     args = option.parser.parse_args()
-    gt = np.load(args.gt)
-    #con_all = np.load('{}.npy'.format(args.conall))
     device = torch.device("cuda")
 
-
-    #변경(추가) 부분. 1024 차원으로 들어오는 TEST 데이터 -> 2048 
-    #1단계는 LN 없이
-    adapter = CopyPlusExtraAdapter(d=1024, use_ln=False).to(device)
-
-    model = Model_V2(args.feature_size).to(device)
-    '''
-    test_loader = DataLoader(Dataset_Con_all_feedback_UCF(args, test_mode=True), 
-                            batch_size=args.batch_size, shuffle=False, 
-                            num_workers=args.workers, pin_memory=False, drop_last=False)
-    
-                            '''
-    #변경 (추가) 부분: (145649, 1024) 데이터 그대로 일단 받아오기
+    # 1. GT / dataset
+    gt = np.load(args.gt)
+        #변경 (추가) 부분: (145649, 1024) 데이터 그대로 일단 받아오기
     xd_dataset = Dataset_Con_all_feedback_XD(args, test_mode=True)
-
-    test_loader = DataLoader(xd_dataset,
-                             batch_size=args.batch_size, shuffle=False, 
-                            num_workers=args.workers, pin_memory=False, drop_last=False)
-    
     X_flat = xd_dataset.con_all
     nalist = np.load("list/nalist_XD_test.npy")
     print("X_flat shape:", X_flat.shape)
     print("nalist shape:", nalist.shape)
 
-    ''' (videowise test 준비단계 확인용)
-    res = run_one_video(X_flat, nalist, 0, adapter, model, device
-    )
-    print("video T:", res["T"])
-    print("prob shape:", res["prob"].shape)
-    print("logit shape:", res["logit"].shape)
-    print("prob[:5]:", res["prob"][:5].reshape(-1))
-    print("logit[:5]:", res["logit"][:5].reshape(-1))
+    '''
+    test_loader = DataLoader(Dataset_Con_all_feedback_UCF(args, test_mode=True), 
+                            batch_size=args.batch_size, shuffle=False, 
+                            num_workers=args.workers, pin_memory=False, drop_last=False)
+    
     '''
     '''
-    res = get_video_scores_and_mask(
-    X_flat, nalist, vid_idx=780,
-    adapter=adapter, model=model, device=device, q=0.5
-    )
-    print("T =", res["T"])
-    print("threshold =", res["threshold"])
-    print("selected =", res["num_selected"])
-    print("prob[:10] =", res["prob"][:10])
-    print("mask[:10] =", res["mask"][:10])
+    test_loader = DataLoader(xd_dataset,
+                             batch_size=args.batch_size, shuffle=False, 
+                            num_workers=args.workers, pin_memory=False, drop_last=False)
+    
+    '''
+   
+    # 2. adapter
+    #변경(추가) 부분. 1024 차원으로 들어오는 TEST 데이터 -> 2048 
+    adapter = CopyPlusExtraAdapter(d=1024, use_ln=True).to(device)
+    #torch.save(adapter.state_dict(), "adapter_init.pt") #baseline adapter 고정(저장) - 초기 1번만
+    adapter.load_state_dict(torch.load("adapter_init.pt",  map_location=device))
+    adapter.eval()
 
+    # 3. model
+    model = Model_V2(args.feature_size).to(device)
+    #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../C2FPL/ckpt/UCFfinal(git).pkl').items()})
+    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_final_20260301_031008_pgn3aode.pkl').items()})
+    model.eval()
+    
+
+    '''
     for i in range(3):
         s, e = nalist[i]
         x_video = X_flat[s:e]
         print(f"video {i}: start={s}, end={e}, T={e-s}, x_video.shape={x_video.shape}")
-'''
-    stats = diagnose_xd_baseline(
+    
+    
+    #Ereal과 Efake가 값이 나오기는 하는지 1차 확인.
+    res0 = inspect_video_energy_terms(
         X_flat=X_flat,
         nalist=nalist,
-        gt=gt,              # 네가 쓰는 XD GT numpy
+        vid_idx=0,
+        adapter=adapter,
+        model=model,
+        device=device,
+        q=0.2,
+        min_keep=8,
+        sgld_steps=10,
+        sgld_lr=0.05,
+        sgld_noise=0.01,
+    )    print(res0)
+    
+    #TEA 1-step만 적용해보기
+    adapter_test = copy.deepcopy(adapter).to(device) 
+    res = tea_one_video_one_step(
+        X_flat=X_flat,
+        nalist=nalist,
+        vid_idx=0,
+        adapter=adapter_test,
+        model=model,
+        device=device,
+        q=0.2,
+        min_keep=8,
+        sgld_steps=10,
+        sgld_lr=0.05,
+        sgld_noise=0.01,
+        tea_lr=1e-3,
+    )    print(res)
+    '''
+    
+    #4. baseline (adapter만, TEA 없음)
+    res_base = eval_xd_with_episodic_tea(
+        X_flat=X_flat,
+        nalist=nalist,
+        gt=gt,
         adapter=adapter,
         model=model,
         device=device,
         frame_repeat=16,
-        topk=5
+        use_tea=False,
+        verbose_every=100,
     )
-        
-    #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../C2FPL/ckpt/UCFfinal(git).pkl').items()})
-    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('unsupervised_ckpt/UCF_best_20260218_165841_tgkaplua.pkl').items()})
-    
+    print("\n[BASELINE]")
+    print("AUC:", res_base["auc"])
+    print("AP :", res_base["ap"])
+
+    # 5. episodic TEA
+    res_tea = eval_xd_with_episodic_tea(
+        X_flat=X_flat,
+        nalist=nalist,
+        gt=gt,
+        adapter=adapter,
+        model=model,
+        device=device,
+        frame_repeat=16,
+        use_tea=True,
+        q=0.2,
+        min_keep=8,
+        sgld_steps=10,
+        sgld_lr=0.05,
+        sgld_noise=0.01,
+        tea_lr=1e-3,
+        tea_steps_per_video=3,
+        verbose_every=100,
+    )
+    print("\n[EPISODIC TEA]")
+    print("AUC:", res_tea["auc"])
+    print("AP :", res_tea["ap"])
+
+    #부트스트랩으로 확인
+    boot_res = bootstrap_video_ci(
+        seg_scores_base=res_base["seg_scores_all"],
+        seg_scores_tea=res_tea["seg_scores_all"],
+        nalist=nalist,
+        gt=gt,
+        frame_repeat=16,
+        n_boot=1000,
+        seed=42,
+    )
     #scores = test(test_loader, model, args, device) #UCF
-    scores = test_2(test_loader, model, adapter, args, device) #XD
+    #scores = test_2(test_loader, model, adapter, args, device) #XD
 
     #변경 (추가) 부분: video-wise
     #scores = test_xd_videowise(X_flat, nalist, model, adapter, args, device)

@@ -1,0 +1,115 @@
+Testset size: (69634, 10, 2048)
+self.con_all shape: (1610, 10, 2048)
+Number of parameters: 2131041
+auc: 0.476547111847899
+epcoh 0 auc =  0.476547111847899
+ 30%|████████████████████████████████▋                                                                            | 6/20 [00:21<00:50,  3.60s/it]
+0.2492048740386963
+auc: 0.558345881674625
+
+Epoch 1/20, LR: 0.0100 auc: 0.5583, ap: 0.0863, loss: 0.2232
+
+0.17361021041870117
+auc: 0.5635664715445354
+
+Epoch 2/20, LR: 0.0100 auc: 0.5636, ap: 0.0872, loss: 0.1680
+
+0.14857196807861328
+auc: 0.5634507778205566
+
+Epoch 3/20, LR: 0.0100 auc: 0.5635, ap: 0.0877, loss: 0.1444
+
+0.13193011283874512
+auc: 0.5470608738510694
+
+Epoch 4/20, LR: 0.0100 auc: 0.5471, ap: 0.0853, loss: 0.1465
+
+0.14134645462036133
+auc: 0.532778824831895
+
+Epoch 5/20, LR: 0.0100 auc: 0.5328, ap: 0.0829, loss: 0.1426
+
+0.13884592056274414
+auc: 0.5187887401113265
+
+Epoch 6/20, LR: 0.0100 auc: 0.5188, ap: 0.0802, loss: 0.1329
+
+0.11605048179626465
+auc: 0.5058434718411924
+
+Epoch 7/20, LR: 0.0100 auc: 0.5058, ap: 0.0780, loss: 0.1317
+
+0.09246945381164551
+auc: 0.49356952421042954
+
+Epoch 8/20, LR: 0.0100 auc: 0.4936, ap: 0.0758, loss: 0.1277
+
+0.10550642013549805
+auc: 0.48962903126561585
+
+Epoch 9/20, LR: 0.0100 auc: 0.4896, ap: 0.0751, loss: 0.1166
+
+0.13123083114624023
+auc: 0.4841855188504508
+
+Epoch 10/20, LR: 0.0100 auc: 0.4842, ap: 0.0741, loss: 0.1177
+
+0.16478800773620605
+auc: 0.4811358523811933
+
+Epoch 11/20, LR: 0.0100 auc: 0.4811, ap: 0.0735, loss: 0.1114
+
+0.10379815101623535
+auc: 0.47809600759262744
+
+Epoch 12/20, LR: 0.0100 auc: 0.4781, ap: 0.0727, loss: 0.1119
+
+0.10895776748657227
+auc: 0.47257339883201244
+
+Epoch 13/20, LR: 0.0100 auc: 0.4726, ap: 0.0718, loss: 0.1044
+
+0.1295011043548584
+auc: 0.4693149537078922
+
+Epoch 14/20, LR: 0.0100 auc: 0.4693, ap: 0.0716, loss: 0.1049
+
+0.16319012641906738
+auc: 0.4658689215527575
+
+Epoch 15/20, LR: 0.0010 auc: 0.4659, ap: 0.0708, loss: 0.0997
+
+0.09793210029602051
+auc: 0.4657073139019252
+
+Epoch 16/20, LR: 0.0010 auc: 0.4657, ap: 0.0707, loss: 0.0979
+
+0.10496640205383301
+auc: 0.46542480939676195
+
+Epoch 17/20, LR: 0.0010 auc: 0.4654, ap: 0.0706, loss: 0.0937
+
+0.1156318187713623
+auc: 0.46536574932411157
+
+Epoch 18/20, LR: 0.0010 auc: 0.4654, ap: 0.0706, loss: 0.0950
+
+0.11348986625671387
+auc: 0.4653148801840672
+
+Epoch 19/20, LR: 0.0010 auc: 0.4653, ap: 0.0706, loss: 0.0962
+
+0.1334381103515625
+auc: 0.464616844146057
+
+Epoch 20/20, LR: 0.0010 auc: 0.4646, ap: 0.0704, loss: 0.0992
+Traceback (most recent call last):
+  File "C:\Users\jplabuser\C2FPL_EVAL\C2FPL\mainv2.py", line 69, in <module>
+    torch.save(model.state_dict(), './unsupervised_ckpt/' + args.datasetname + 'final.pkl')
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\serialization.py", line 849, in save
+    with _open_zipfile_writer(f) as opened_zipfile:
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\serialization.py", line 716, in _open_zipfile_writer
+    return container(name_or_buffer)
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\serialization.py", line 687, in __init__
+    super().__init__(torch._C.PyTorchFileWriter(self.name))
+RuntimeError: Parent directory ./unsupervised_ckpt does not exist.

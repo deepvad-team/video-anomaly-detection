@@ -1,0 +1,7 @@
+Testset size: (69634, 10, 2048)
+Traceback (most recent call last):
+  File "C:\Users\jplabuser\C2FPL_EVAL\C2FPL\mainv2.py", line 32, in <module>
+    train_loader = DataLoader(Dataset_Con_all_feedback_XD(args, test_mode=False, is_normal=True),
+  File "C:\Users\jplabuser\C2FPL_EVAL\C2FPL\dataset.py", line 30, in __init__
+    self.con_all = np.memmap('../../C2FPL/concat_UCF.npy', dtype='float32', mode='r', shape=(total_T, 10, 2048)).copy()
+numpy._core._exceptions._ArrayMemoryError: Unable to allocate 59.5 GiB for an array with shape (779951, 10, 2048) and data type float32

@@ -1,0 +1,12 @@
+Testset size: (69634, 10, 2048)
+Traceback (most recent call last):
+  File "C:\Users\jplabuser\C2FPL_EVAL\C2FPL\mainv2.py", line 32, in <module>
+    train_loader = DataLoader(Dataset_Con_all_feedback_XD(args, test_mode=False, is_normal=True),
+                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\jplabuser\C2FPL_EVAL\C2FPL\dataset.py", line 26, in __init__
+    self.con_all = np.load("concatenated/concat_UCF.npy")
+                   ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\jplabuser\AppData\Local\Programs\Python\Python313\Lib\site-packages\numpy\lib\_npyio_impl.py", line 454, in load
+    fid = stack.enter_context(open(os.fspath(file), "rb"))
+                              ~~~~^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'concatenated/concat_UCF.npy'

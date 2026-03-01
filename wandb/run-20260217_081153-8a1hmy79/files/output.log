@@ -1,0 +1,12 @@
+Testset size: (69634, 10, 2048)
+self.con_all shape: (779951, 10, 2048)
+Number of parameters: 2131041
+auc: 0.46298402222819607
+epcoh 0 auc =  0.46298402222819607
+  0%|                                                                                                                                           | 0/20 [08:01<?, ?it/s]
+454.6393404006958
+auc: 0.5601388472156108
+Traceback (most recent call last):
+  File "C:\Users\jplabuser\C2FPL_EVAL\C2FPL\mainv2.py", line 83, in <module>
+    if auc > best_auc:
+NameError: name 'best_auc' is not defined

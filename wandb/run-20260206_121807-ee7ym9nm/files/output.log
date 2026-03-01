@@ -1,0 +1,22 @@
+Testset size: (69634, 10, 2048)
+self.con_all shape: (1610, 32, 10, 2048)
+Number of parameters: 2131041
+auc: 0.4302675557890608
+epcoh 0 auc =  0.4302675557890608
+  0%|                                                                                                                     | 0/20 [00:00<?, ?it/s]
+Traceback (most recent call last):
+  File "C:\Users\jplabuser\C2FPL_EVAL\C2FPL\mainv2.py", line 57, in <module>
+    loss, lls = concatenated_train_feedback(train_loader, model, optimizer,original_lables, device )
+  File "C:\Users\jplabuser\C2FPL_EVAL\C2FPL\train.py", line 136, in concatenated_train_feedback
+    for _, (input, idx) in enumerate(loader):
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\dataloader.py", line 701, in __next__
+    data = self._next_data()
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\dataloader.py", line 756, in _next_data
+    index = self._next_index()  # may raise StopIteration
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\dataloader.py", line 691, in _next_index
+    return next(self._sampler_iter)  # may raise StopIteration
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\sampler.py", line 347, in __iter__
+    for idx in self.sampler:
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\sampler.py", line 197, in __iter__
+    yield from torch.randperm(n, generator=generator).tolist()
+RuntimeError: Expected a 'cuda' device type for generator but found 'cpu'

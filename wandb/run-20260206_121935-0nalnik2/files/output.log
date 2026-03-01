@@ -1,0 +1,20 @@
+Testset size: (69634, 10, 2048)
+self.con_all shape: (1610, 32, 10, 2048)
+Number of parameters: 2131041
+auc: 0.5236935737364143
+epcoh 0 auc =  0.5236935737364143
+  0%|                                                                                                                     | 0/20 [00:00<?, ?it/s]
+Traceback (most recent call last):
+  File "C:\Users\jplabuser\C2FPL_EVAL\C2FPL\mainv2.py", line 57, in <module>
+    loss, lls = concatenated_train_feedback(train_loader, model, optimizer,original_lables, device )
+  File "C:\Users\jplabuser\C2FPL_EVAL\C2FPL\train.py", line 145, in concatenated_train_feedback
+    loss = loss_fn(scores, labels)
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\nn\modules\module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\nn\modules\module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\nn\modules\loss.py", line 697, in forward
+    return F.binary_cross_entropy(
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\nn\functional.py", line 3545, in binary_cross_entropy
+    raise ValueError(
+ValueError: Using a target size (torch.Size([128])) that is different to the input size (torch.Size([1280])) is deprecated. Please ensure they have the same size.

@@ -1,0 +1,123 @@
+_wandb:
+    value:
+        cli_version: 0.23.1
+        e:
+            g12bc349o3217jo5sx1k6qmn7nvq4h34:
+                args:
+                    - --lossfn
+                    - BCE
+                    - --optimizer
+                    - SGD
+                    - --max-epoch
+                    - "20"
+                    - --outer-epochs
+                    - "1"
+                    - --batch-size
+                    - "128"
+                    - --lr
+                    - "0.001"
+                    - --feature-size
+                    - "2048"
+                    - --gt
+                    - list/gt-ucf-RTFM.npy
+                    - --datasetname
+                    - UCF
+                    - --pseudofile
+                    - Unsup_labels/UCF_labels_org.npy
+                    - --conall
+                    - concat_UCF
+                codePath: mainv2.py
+                codePathLocal: mainv2.py
+                cpu_count: 6
+                cpu_count_logical: 12
+                cudaVersion: "12.6"
+                disk:
+                    /:
+                        total: "499091763200"
+                        used: "484134039552"
+                email: nayoung.kim.it@gmail.com
+                executable: C:\Users\jplabuser\anaconda3\envs\c2fpl\python.exe
+                git:
+                    commit: 64e37250c84e6c7a870efca50285e7680ccf7dc0
+                    remote: https://github.com/deepvad-team/video-anomaly-detection.git
+                gpu: NVIDIA GeForce RTX 3060
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ampere
+                      cudaCores: 3584
+                      memoryTotal: "12884901888"
+                      name: NVIDIA GeForce RTX 3060
+                      uuid: GPU-9a0f6584-ceb0-22d3-a76f-e07c1e91b17a
+                host: DESKTOP-56JKG4
+                memory:
+                    total: "16984231936"
+                os: Windows-10-10.0.26100-SP0
+                program: C:\Users\jplabuser\C2FPL_EVAL\C2FPL\mainv2.py
+                python: CPython 3.9.25
+                root: C:\Users\jplabuser\C2FPL_EVAL\C2FPL
+                startedAt: "2026-02-16T23:02:32.822657Z"
+                writerId: g12bc349o3217jo5sx1k6qmn7nvq4h34
+        m: []
+        python_version: 3.9.25
+        t:
+            "1":
+                - 1
+                - 5
+                - 53
+            "2":
+                - 1
+                - 5
+                - 53
+            "3":
+                - 16
+                - 61
+            "4": 3.9.25
+            "5": 0.23.1
+            "8":
+                - 3
+            "12": 0.23.1
+            "13": windows-amd64
+batch_size:
+    value: 128
+conall:
+    value: concat_UCF
+datasetname:
+    value: UCF
+eps2:
+    value: 0.4
+feat_extractor:
+    value: i3d
+feature_size:
+    value: 2048
+gt:
+    value: list/gt-ucf-RTFM.npy
+lossfn:
+    value: BCE
+lr:
+    value: 0.001
+max_epoch:
+    value: 20
+model_name:
+    value: C2FPL
+modelversion:
+    value: Model_V2
+num_classes:
+    value: 1
+optimizer:
+    value: SGD
+outer_epochs:
+    value: 1
+pseudo:
+    value: Unsup_labels/UCF_unsup_labels_original_V2.npy
+pseudofile:
+    value: Unsup_labels/UCF_labels_org.npy
+rgb_list:
+    value: ./list/ucf-c3d.list
+stepsize:
+    value: 5
+test_rgb_list:
+    value: ./list/ucf-c3d-test.list
+windowsize:
+    value: 0.09
+workers:
+    value: 0

@@ -1,0 +1,38 @@
+Testset size: (69634, 10, 2048)
+self.con_all shape: (779951, 10, 2048)
+Number of parameters: 2131041
+auc: 0.46298402222819607
+epcoh 0 auc =  0.46298402222819607
+init best_auc: 0.46298402222819607 -> unsupervised_ckpt/UCF_best_20260218_155558_j3cijjar.pkl
+ 15%|███████████████████▏                                                                                                            | 3/20 [25:39<2:25:25, 513.28s/it]
+473.96043848991394
+auc: 0.5601388472156108
+[BEST] epoch 1 best_auc updated: 0.5601-> saved to unsupervised_ckpt/UCF_best_20260218_155558_j3cijjar.pkl
+
+Epoch 1/20, LR: 0.0100 auc: 0.5601, ap: 0.0944, loss: 0.3056
+
+483.8273231983185
+auc: 0.5190702151112484
+
+Epoch 2/20, LR: 0.0100 auc: 0.5191, ap: 0.0818, loss: 0.2315
+
+486.53934931755066
+auc: 0.5476089473482793
+
+Epoch 3/20, LR: 0.0100 auc: 0.5476, ap: 0.0923, loss: 0.2113
+Traceback (most recent call last):
+  File "C:\Users\jplabuser\C2FPL_EVAL\C2FPL\mainv2.py", line 85, in <module>
+    loss, lls = concatenated_train_feedback(train_loader, model, optimizer,original_lables, device )
+  File "C:\Users\jplabuser\C2FPL_EVAL\C2FPL\train.py", line 109, in concatenated_train_feedback
+    for _, (input, idx) in enumerate(loader):
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\dataloader.py", line 701, in __next__
+    data = self._next_data()
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\dataloader.py", line 757, in _next_data
+    data = self._dataset_fetcher.fetch(index)  # may raise StopIteration
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\_utils\fetch.py", line 52, in fetch
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\_utils\fetch.py", line 52, in <listcomp>
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+  File "C:\Users\jplabuser\C2FPL_EVAL\C2FPL\dataset.py", line 42, in __getitem__
+    features = np.array(features, dtype=np.float32)
+KeyboardInterrupt

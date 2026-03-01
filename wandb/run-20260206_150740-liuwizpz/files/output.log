@@ -1,0 +1,126 @@
+Testset size: (69634, 10, 2048)
+self.con_all shape: (779951, 10, 2048)
+Number of parameters: 2131041
+auc: 0.48901746676337926
+epcoh 0 auc =  0.48901746676337926
+ 30%|██████████████████████████████████████▍                                                                                         | 6/20 [47:18<1:49:50, 470.73s/it]
+435.5156764984131
+auc: 0.5768958217713732
+
+Epoch 1/20, LR: 0.0100 auc: 0.5769, ap: 0.0876, loss: 0.1249
+
+432.67053961753845
+auc: 0.5857356901130937
+
+Epoch 2/20, LR: 0.0100 auc: 0.5857, ap: 0.0878, loss: 0.0918
+
+474.3298532962799
+auc: 0.5782659434660625
+
+Epoch 3/20, LR: 0.0100 auc: 0.5783, ap: 0.0888, loss: 0.0838
+
+454.6046841144562
+auc: 0.5619162080605925
+
+Epoch 4/20, LR: 0.0100 auc: 0.5619, ap: 0.0820, loss: 0.0796
+
+431.33262515068054
+auc: 0.5984976513985045
+
+Epoch 5/20, LR: 0.0100 auc: 0.5985, ap: 0.1045, loss: 0.0773
+
+434.34771394729614
+auc: 0.538787322782126
+
+Epoch 6/20, LR: 0.0100 auc: 0.5388, ap: 0.0780, loss: 0.0752
+
+433.75281977653503
+auc: 0.553543806352703
+
+Epoch 7/20, LR: 0.0100 auc: 0.5535, ap: 0.0815, loss: 0.0742
+
+430.64126682281494
+auc: 0.5531984582073397
+
+Epoch 8/20, LR: 0.0100 auc: 0.5532, ap: 0.0896, loss: 0.0733
+
+429.74016761779785
+auc: 0.5599190095036863
+
+Epoch 9/20, LR: 0.0100 auc: 0.5599, ap: 0.0837, loss: 0.0724
+
+425.5620906352997
+auc: 0.5407221030153136
+
+Epoch 10/20, LR: 0.0100 auc: 0.5407, ap: 0.0814, loss: 0.0718
+
+431.44219493865967
+auc: 0.5358969180947428
+
+Epoch 11/20, LR: 0.0100 auc: 0.5359, ap: 0.0777, loss: 0.0713
+
+430.7604880332947
+auc: 0.5708501832895307
+
+Epoch 12/20, LR: 0.0100 auc: 0.5709, ap: 0.0919, loss: 0.0706
+
+428.402880191803
+auc: 0.5442252732176649
+
+Epoch 13/20, LR: 0.0100 auc: 0.5442, ap: 0.0836, loss: 0.0707
+
+433.14402318000793
+auc: 0.5249230213603755
+
+Epoch 14/20, LR: 0.0100 auc: 0.5249, ap: 0.0760, loss: 0.0700
+
+428.00780630111694
+auc: 0.5329968365368034
+
+Epoch 15/20, LR: 0.0010 auc: 0.5330, ap: 0.0825, loss: 0.0702
+
+433.69742012023926
+auc: 0.5451741095471652
+
+Epoch 16/20, LR: 0.0010 auc: 0.5452, ap: 0.0823, loss: 0.0584
+
+422.16754055023193
+auc: 0.5419859156586339
+
+Epoch 17/20, LR: 0.0010 auc: 0.5420, ap: 0.0827, loss: 0.0559
+
+428.0762040615082
+auc: 0.5484422305291833
+
+Epoch 18/20, LR: 0.0010 auc: 0.5484, ap: 0.0853, loss: 0.0549
+
+428.2298536300659
+auc: 0.5449909148754523
+
+Epoch 19/20, LR: 0.0010 auc: 0.5450, ap: 0.0851, loss: 0.0540
+Traceback (most recent call last):
+  File "C:\Users\jplabuser\C2FPL_EVAL\C2FPL\mainv2.py", line 57, in <module>
+    loss, lls = concatenated_train_feedback(train_loader, model, optimizer,original_lables, device )
+  File "C:\Users\jplabuser\C2FPL_EVAL\C2FPL\train.py", line 136, in concatenated_train_feedback
+    for _, (input, idx) in enumerate(loader):
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\dataloader.py", line 701, in __next__
+    data = self._next_data()
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\dataloader.py", line 757, in _next_data
+    data = self._dataset_fetcher.fetch(index)  # may raise StopIteration
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\_utils\fetch.py", line 55, in fetch
+    return self.collate_fn(data)
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\_utils\collate.py", line 398, in default_collate
+    return collate(batch, collate_fn_map=default_collate_fn_map)
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\_utils\collate.py", line 211, in collate
+    return [
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\_utils\collate.py", line 212, in <listcomp>
+    collate(samples, collate_fn_map=collate_fn_map)
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\_utils\collate.py", line 155, in collate
+    return collate_fn_map[elem_type](batch, collate_fn_map=collate_fn_map)
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\_utils\collate.py", line 285, in collate_numpy_array_fn
+    return collate([torch.as_tensor(b) for b in batch], collate_fn_map=collate_fn_map)
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\_utils\collate.py", line 155, in collate
+    return collate_fn_map[elem_type](batch, collate_fn_map=collate_fn_map)
+  File "C:\Users\jplabuser\anaconda3\envs\c2fpl\lib\site-packages\torch\utils\data\_utils\collate.py", line 272, in collate_tensor_fn
+    return torch.stack(batch, 0, out=out)
+KeyboardInterrupt
