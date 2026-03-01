@@ -10,7 +10,7 @@ from torch.autograd import Variable
 
 def load_frame(frame_file):
 	data = Image.open(frame_file)
-	data = data.resize((340, 256), Image.ANTIALIAS)
+	data = data.resize((340, 256), Image.Resampling.LANCZOS)
 	data = np.array(data)
 	data = data.astype(float)
 	data = (data * 2 / 255) - 1
