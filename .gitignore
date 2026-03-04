@@ -1,1 +1,3 @@
-wandb/concat_XD_test.npy
+*.npy
+*.pyc
+__pycache__/
