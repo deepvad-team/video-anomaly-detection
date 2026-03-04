@@ -11,7 +11,7 @@ from tqdm import tqdm
 import time
 import os
 from model import Model, Model_V2
-from adapter import CopyPlusExtraAdapter
+from adapter import CopyPlusExtraAdapter, ResidualAdapter2048
 # from datasets.dataset import 
 import copy
 
@@ -109,7 +109,7 @@ def test_2(dataloader, model, adapter, args, device):
         
         return rec_auc, pr_auc
 
-
+# ----------------------------------------------------------------------------------------------------------
 
 # ---------------------------
 # Video diagnostics
@@ -277,135 +277,6 @@ def inspect_video_energy_terms(
         "prob_sel_mean": float(prob_sel.mean().item()),
         "prob_fake_mean": float(prob_fake.mean().item()),
     }
-
-
-# ---------------------------
-# TEA
-# ---------------------------
-
-def tea_one_video_one_step(
-    X_flat,
-    nalist,
-    vid_idx,
-    adapter,
-    model,
-    device,
-    q=0.2,
-    min_keep=8,
-    sgld_steps=10,
-    sgld_lr=0.05,
-    sgld_noise=0.01,
-    tea_lr=1e-3,
-):
-    """
-    비디오 1개에 대해:
-    - normal 후보 선택
-    - E_real / E_fake 계산
-    - adapter.ln 만 1 step update
-    - update 전/후 score 평균 비교
-    """
-
-    # detector는 freeze
-    model.eval()
-    for p in model.parameters():
-        p.requires_grad_(False)
-
-    # adapter 중 LN만 update
-    adapter.train()
-    for p in adapter.parameters():
-        p.requires_grad_(False)
-
-    if not hasattr(adapter, "ln"):
-        raise ValueError("adapter has no .ln ; use LayerNorm version adapter")
-
-    adapter.ln.weight.requires_grad_(True)
-    adapter.ln.bias.requires_grad_(True)
-
-    optimizer = torch.optim.Adam([adapter.ln.weight, adapter.ln.bias], lr=tea_lr)
-
-    s, e = nalist[vid_idx]
-    x_video = torch.from_numpy(X_flat[s:e]).float().to(device)
-
-    # update 전 baseline
-    with torch.no_grad():
-        x_2048_before = adapter(x_video)
-        prob_before, logit_before = model(x_2048_before, return_logits=True)
-
-    prob_before = prob_before.squeeze(-1)
-    logit_before = logit_before.squeeze(-1)
-
-    thresh = torch.quantile(prob_before, q)
-    mask = prob_before <= thresh
-
-    if int(mask.sum().item()) < min_keep:
-        print(f"[video {vid_idx}] too few selected segments. skip.")
-        return None
-
-    x_sel = x_video[mask].detach()
-
-    # -------- E_real --------
-    x_sel_2048 = adapter(x_sel)
-    _, logit_real = model(x_sel_2048, return_logits=True)
-    logit_real = logit_real.squeeze(-1)
-    E_real = F.softplus(logit_real).mean()
-
-    # -------- E_fake via SGLD --------
-    x_tilde = (x_sel + sgld_noise * torch.randn_like(x_sel)).detach()
-
-    # SGLD에서는 input grad 필요, adapter/model 파라미터 grad는 optimizer 대상만
-    for _ in range(sgld_steps):
-        x_tilde.requires_grad_(True)
-
-        x_tilde_2048 = adapter(x_tilde)
-        _, logit_tilde = model(x_tilde_2048, return_logits=True)
-        logit_tilde = logit_tilde.squeeze(-1)
-        E_tilde_now = F.softplus(logit_tilde).mean()
-
-        grad = torch.autograd.grad(E_tilde_now, x_tilde, create_graph=False)[0]
-
-        with torch.no_grad():
-            x_tilde = x_tilde - (sgld_lr / 2.0) * grad + sgld_noise * torch.randn_like(x_tilde)
-        x_tilde = x_tilde.detach()
-
-    x_tilde_2048 = adapter(x_tilde)
-    _, logit_fake = model(x_tilde_2048, return_logits=True)
-    logit_fake = logit_fake.squeeze(-1)
-    E_fake = F.softplus(logit_fake).mean()
-
-    # -------- TEA loss --------
-    loss = E_real - E_fake
-
-    optimizer.zero_grad(set_to_none=True)
-    loss.backward()
-    optimizer.step()
-
-    # update 후 baseline 다시 확인
-    adapter.eval()
-    with torch.no_grad():
-        x_2048_after = adapter(x_video)
-        prob_after, logit_after = model(x_2048_after, return_logits=True)
-
-    prob_after = prob_after.squeeze(-1)
-    logit_after = logit_after.squeeze(-1)
-
-    print(f"[video {vid_idx}]")
-    print(f" selected = {int(mask.sum().item())}")
-    print(f" E_real   = {E_real.item():.6f}")
-    print(f" E_fake   = {E_fake.item():.6f}")
-    print(f" loss     = {loss.item():.6f}")
-    print(f" prob mean before = {prob_before.mean().item():.6f}")
-    print(f" prob mean after  = {prob_after.mean().item():.6f}")
-
-    return {
-        "vid_idx": vid_idx,
-        "selected": int(mask.sum().item()),
-        "E_real": float(E_real.item()),
-        "E_fake": float(E_fake.item()),
-        "loss": float(loss.item()),
-        "prob_mean_before": float(prob_before.mean().item()),
-        "prob_mean_after": float(prob_after.mean().item()),
-    }
-
 
 # ---------------------------
 # TEA helper (episodic)
@@ -774,24 +645,20 @@ if __name__ == '__main__':
     # 2. adapter
     #변경(추가) 부분. 1024 차원으로 들어오는 TEST 데이터 -> 2048 
     adapter = CopyPlusExtraAdapter(d=1024, use_ln=True).to(device)
-    #torch.save(adapter.state_dict(), "adapter_init.pt") #baseline adapter 고정(저장) - 초기 1번만
+    #adapter = ResidualAdapter2048(d = 2048, use_ln = True).to(device)
+    torch.save(adapter.state_dict(), "adapter_init.pt") #baseline adapter 고정(저장) - 초기 1번만
     adapter.load_state_dict(torch.load("adapter_init.pt",  map_location=device))
     adapter.eval()
 
     # 3. model
     model = Model_V2(args.feature_size).to(device)
     #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../C2FPL/ckpt/UCFfinal(git).pkl').items()})
-    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_final_20260301_031008_pgn3aode.pkl').items()})
+    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('unsupervised_ckpt/UCF_final_20260218_165841_tgkaplua.pkl').items()})  #train from scratch and evaluate
+    #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_final_20260301_031008_pgn3aode.pkl').items()}) #weaklysupervised
     model.eval()
     
 
     '''
-    for i in range(3):
-        s, e = nalist[i]
-        x_video = X_flat[s:e]
-        print(f"video {i}: start={s}, end={e}, T={e-s}, x_video.shape={x_video.shape}")
-    
-    
     #Ereal과 Efake가 값이 나오기는 하는지 1차 확인.
     res0 = inspect_video_energy_terms(
         X_flat=X_flat,
@@ -806,23 +673,6 @@ if __name__ == '__main__':
         sgld_lr=0.05,
         sgld_noise=0.01,
     )    print(res0)
-    
-    #TEA 1-step만 적용해보기
-    adapter_test = copy.deepcopy(adapter).to(device) 
-    res = tea_one_video_one_step(
-        X_flat=X_flat,
-        nalist=nalist,
-        vid_idx=0,
-        adapter=adapter_test,
-        model=model,
-        device=device,
-        q=0.2,
-        min_keep=8,
-        sgld_steps=10,
-        sgld_lr=0.05,
-        sgld_noise=0.01,
-        tea_lr=1e-3,
-    )    print(res)
     '''
     
     #4. baseline (adapter만, TEA 없음)
@@ -851,13 +701,13 @@ if __name__ == '__main__':
         device=device,
         frame_repeat=16,
         use_tea=True,
-        q=0.2,
+        q=0.05,
         min_keep=8,
         sgld_steps=10,
         sgld_lr=0.05,
         sgld_noise=0.01,
         tea_lr=1e-3,
-        tea_steps_per_video=3,
+        tea_steps_per_video=1,
         verbose_every=100,
     )
     print("\n[EPISODIC TEA]")
@@ -876,7 +726,3 @@ if __name__ == '__main__':
     )
     #scores = test(test_loader, model, args, device) #UCF
     #scores = test_2(test_loader, model, adapter, args, device) #XD
-
-    #변경 (추가) 부분: video-wise
-    #scores = test_xd_videowise(X_flat, nalist, model, adapter, args, device)
-    

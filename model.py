@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.nn.init as torch_init
 #torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
@@ -69,3 +70,4 @@ class Model_V2(nn.Module): # multiplication then Addition
             return prob_out, logits_out
 
         return prob_out
+ 

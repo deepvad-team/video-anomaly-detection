@@ -5,7 +5,6 @@
 - detector input으로 넘기기
 '''
 
-# feature_bridge/feature_loader.py
 import os
 import numpy as np
 import torch
@@ -21,8 +20,9 @@ def load_feature_npy(path: str) -> np.ndarray:
 def ensure_feature_shape(feat: np.ndarray) -> np.ndarray:
     """
     Accept:
-      - (T, 10, 2048)
-      - (T, 2048)
+      - (10, 2048)
+      - (1, 10, 2048)
+      - (N, 10, 2048)
 
     Return:
       - same shape if valid
@@ -44,11 +44,11 @@ def ensure_feature_shape(feat: np.ndarray) -> np.ndarray:
 
 def run_detector_with_adapter(feat_np, adapter, model, device):
     """
-    feat_np: (1,10,2048) or (10,2048)
+    feat_np: (1,10,2048) or (10,2048) or (N, 10, 2048)
 
     returns:
-      prob_np: (1,)
-      logit_np: (1,)
+      prob_np: (N,)
+      logit_np: (N,)
     """
     feat_np = ensure_feature_shape(feat_np)
     x = torch.from_numpy(feat_np).float().to(device)
@@ -65,28 +65,6 @@ def run_detector_with_adapter(feat_np, adapter, model, device):
 
     return prob, logit
 
-def run_detector_with_adapter(feat_np, adapter, model, device):
-    """
-    feat_np: (1,10,2048) or (10,2048)
-
-    returns:
-      prob_np: (1,)
-      logit_np: (1,)
-    """
-    feat_np = ensure_feature_shape(feat_np)
-    x = torch.from_numpy(feat_np).float().to(device)
-
-    adapter.eval()
-    model.eval()
-
-    with torch.no_grad():
-        x_adapt = adapter(x)
-        prob, logit = model(x_adapt, return_logits=True)
-
-    prob = prob.squeeze(-1).detach().cpu().numpy()
-    logit = logit.squeeze(-1).detach().cpu().numpy()
-
-    return prob, logit
 
 class EMASmoother:
     def __init__(self, alpha=0.2):
@@ -115,15 +93,38 @@ class HysteresisAlert:
             self.alert = False
         return self.alert
 
+#TEA 없이 adapter만 통과시켜 돌리는 실험용
+def run_detector_with_adapter(feat_np, adapter, model, device):
+    """
+    feat_np: (1,10,2048) or (10,2048)
+
+    returns:
+      prob_np: (1,)
+      logit_np: (1,)
+    """
+    feat_np = ensure_feature_shape(feat_np)
+    x = torch.from_numpy(feat_np).float().to(device)
+
+    adapter.eval()
+    model.eval()
+
+    with torch.no_grad():
+        x_adapt = adapter(x)
+        prob, logit = model(x_adapt, return_logits=True)
+
+    prob = prob.squeeze(-1).detach().cpu().numpy()
+    logit = logit.squeeze(-1).detach().cpu().numpy()
+
+    return prob, logit
 
 
 def feature_to_tensor(feat: np.ndarray, device: torch.device) -> torch.Tensor:
-    feat = normalize_feature_shape(feat)
+    feat = ensure_feature_shape(feat)
     return torch.from_numpy(feat).float().to(device)
 
 
 def summarize_feature(feat: np.ndarray, name: str = "feature") -> None:
-    x = normalize_feature_shape(feat)
+    x = ensure_feature_shape(feat)
     x_mean = x.mean(axis=1) if x.ndim == 3 else x
     norms = np.linalg.norm(x_mean, axis=-1)
 

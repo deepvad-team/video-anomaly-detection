@@ -1,1 +1,13 @@
-wandb/concat_XD_test.npy
+# Python cache
+__pycache__/
+*.pyc
+
+# Pytorch / model files
+*.pth
+*.pt
+
+*.npy
+
+# logs & ouput folderrs
+wandb/
+
