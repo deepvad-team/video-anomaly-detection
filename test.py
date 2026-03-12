@@ -46,13 +46,14 @@ def test(dataloader, model, args, device):
         rec_auc = auc(fpr, tpr)
         print('auc: ' + str(rec_auc))
 
-        np.save('threshold_UCF.npy', threshold)
+        np.save('roc_threshold_UCF.npy', threshold)
         np.save('fpr_UCF.npy', fpr)
         np.save('tpr_UCF.npy', tpr)
    
         #PR CURVE
         precision, recall, th = precision_recall_curve(list(gt), pred)
         pr_auc = auc(recall, precision)
+        np.save('pr_threshold_UCF.npy', th)
         np.save('precision_UCF.npy', precision)
         np.save('recall_UCF.npy', recall)
 
@@ -282,6 +283,67 @@ def inspect_video_energy_terms(
 # TEA helper (episodic)
 # ---------------------------
 
+
+
+# 정상 후보 선택 시 연속된 segment인 경우만 뽑도록 기준을 강화하는 실험용 helper 함수들 ------------------------------------------------------------------------
+
+def _find_consecutive_true_runs(mask_np, min_run=2):
+    """
+    mask_np: numpy bool array, shape (T,)
+    return: 연속 구간 길이가 min_run 이상인 인덱스 list
+    """
+    idx = []
+    start = None
+
+    for i, v in enumerate(mask_np):
+        if v and start is None:
+            start = i
+        elif (not v) and start is not None:
+            if i - start >= min_run:
+                idx.extend(range(start, i))
+            start = None
+
+    if start is not None and len(mask_np) - start >= min_run:
+        idx.extend(range(start, len(mask_np)))
+
+    return idx
+def _select_normal_mask_strict(prob, q=0.1, min_keep=8, min_run=2):
+    """
+    더 엄격한 normal 후보 선택:
+    1) 하위 q 분위수 이하
+    2) 연속 구간 길이 min_run 이상만 사용
+    3) 너무 적으면 fallback으로 가장 낮은 점수 min_keep개 사용
+    """
+    T = prob.numel()
+    thresh = torch.quantile(prob, q)
+
+    base_mask = (prob <= thresh)   # (T,)
+    base_mask_np = base_mask.detach().cpu().numpy().astype(bool)
+
+    run_idx = _find_consecutive_true_runs(base_mask_np, min_run=min_run)
+
+    mask = torch.zeros_like(base_mask, dtype=torch.bool)
+
+    if len(run_idx) > 0:
+        idx_t = torch.tensor(run_idx, device=prob.device, dtype=torch.long)
+        mask[idx_t] = True
+
+    num_selected = int(mask.sum().item())
+
+    # fallback: 너무 적으면 가장 낮은 점수 min_keep개 사용
+    if num_selected < min_keep:
+        k = min(max(min_keep, 1), T)
+        topk_idx = torch.argsort(prob)[:k]
+        mask = torch.zeros_like(base_mask, dtype=torch.bool)
+        mask[topk_idx] = True
+        num_selected = int(mask.sum().item())
+
+    return mask, thresh, num_selected
+
+# -------------------------------------------------------------------------------------------------------------------
+
+
+
 def _segment_gt_from_gt(gt, total_T, frame_repeat=16):
     gt = np.asarray(gt).astype(np.int64).reshape(-1)
 
@@ -298,6 +360,171 @@ def _segment_gt_from_gt(gt, total_T, frame_repeat=16):
         )
     return seg_gt, gt_mode
 
+# local prototype을 E_real 로 선택하는 실험용 helper 함수들 ------------------------------------------------------------------------
+
+def _select_mask_by_local_prototype(
+    x_video,          # torch tensor, (T, 1024)
+    q=0.05,
+    min_keep=8,
+    n_reference=5,
+    min_run=2,
+    l2_normalize=False,
+):
+    """
+    앞 n_reference 세그먼트 평균을 local prototype으로 두고,
+    prototype에 가까운 하위 q% 세그먼트를 normal 후보로 선택.
+    """
+    T = x_video.shape[0]
+    device = x_video.device
+
+    # 너무 짧은 비디오는 fallback
+    if T <= n_reference:
+        mask = torch.zeros(T, dtype=torch.bool, device=device)
+        keep = min(T, max(min_keep, 1))
+        mask[:keep] = True
+        dists = torch.zeros(T, dtype=x_video.dtype, device=device)
+        thresh = torch.tensor(0.0, device=device, dtype=x_video.dtype)
+        return mask, dists, thresh, int(mask.sum().item())
+
+    feat = x_video.detach()
+
+    if l2_normalize:
+        feat = feat / (feat.norm(dim=1, keepdim=True) + 1e-8)
+
+    prototype = feat[:n_reference].mean(dim=0, keepdim=True)  # (1, 1024)
+    dists = torch.norm(feat - prototype, dim=1)               # (T,)
+
+    # reference 자체는 항상 normal 후보에 포함되게 거리 0
+    dists[:n_reference] = 0.0
+
+    thresh = torch.quantile(dists, q)
+    base_mask = dists <= thresh
+
+    # 연속 구간 조건
+    base_mask_np = base_mask.detach().cpu().numpy().astype(bool)
+    run_idx = _find_consecutive_true_runs(base_mask_np, min_run=min_run)
+
+    mask = torch.zeros_like(base_mask, dtype=torch.bool)
+    if len(run_idx) > 0:
+        idx_t = torch.tensor(run_idx, device=device, dtype=torch.long)
+        mask[idx_t] = True
+
+    # fallback
+    num_selected = int(mask.sum().item())
+    if num_selected < min_keep:
+        k = min(max(min_keep, 1), T)
+        topk_idx = torch.argsort(dists)[:k]
+        mask = torch.zeros_like(base_mask, dtype=torch.bool)
+        mask[topk_idx] = True
+        num_selected = int(mask.sum().item())
+
+    return mask, dists, thresh, num_selected
+
+# ----------------------------------------------------------------------------------------------------------------
+
+
+
+
+
+# 4-1. local prototype only 실험용 helper 함수들 ------------------------------------------------------------------------
+
+def _compute_local_proto_scores_one_video(
+    x_video_np,          # numpy, (T, 1024)
+    n_reference=5,
+    l2_normalize=False,
+    per_video_zscore=False,
+):
+    """
+    친구 local prototype 아이디어의 최소 버전:
+    - 앞 n_reference 세그먼트 평균을 prototype으로 사용
+    - 앞 n_reference 세그먼트 score = 0
+    - 나머지 세그먼트 score = prototype과의 L2 distance
+    """
+    T = len(x_video_np)
+    scores = np.zeros(T, dtype=np.float32)
+
+    if T <= n_reference:
+        return scores
+
+    feat = x_video_np.astype(np.float32).copy()   # (T, 1024)
+
+    if l2_normalize:
+        norms = np.linalg.norm(feat, axis=1, keepdims=True) + 1e-8
+        feat = feat / norms
+
+    prototype = feat[:n_reference].mean(axis=0)   # (1024,)
+
+    dists = np.linalg.norm(feat - prototype, axis=1).astype(np.float32)
+    dists[:n_reference] = 0.0
+
+    if per_video_zscore:
+        valid_mask = np.arange(T) >= n_reference
+        valid = dists[valid_mask]
+        if len(valid) >= 2:
+            mean = valid.mean()
+            std = valid.std()
+            if std > 1e-6:
+                dists[valid_mask] = (valid - mean) / std
+
+    return dists
+
+
+def eval_xd_local_prototype_only(
+    X_flat,              # numpy, (total_T, 1024)
+    nalist,              # numpy, (num_videos, 2)
+    gt,                  # numpy, (total_T,) or (total_T*16,)
+    frame_repeat=16,
+    n_reference=5,
+    l2_normalize=False,
+    per_video_zscore=False,
+    verbose_every=100,
+):
+    """
+    XD 전체 test셋:
+    - 비디오별 앞 5세그(local prototype) 기반 distance score 계산
+    - 같은 GT 정렬 방식으로 AUC/AP 계산
+    """
+    total_T = X_flat.shape[0]
+    seg_gt, gt_mode = _segment_gt_from_gt(gt, total_T, frame_repeat=frame_repeat)
+
+    seg_scores_all = np.zeros(total_T, dtype=np.float32)
+
+    for vid_idx in range(len(nalist)):
+        s, e = nalist[vid_idx]
+        x_video_np = X_flat[s:e]   # (T_i, 1024)
+
+        local_scores = _compute_local_proto_scores_one_video(
+            x_video_np=x_video_np,
+            n_reference=n_reference,
+            l2_normalize=l2_normalize,
+            per_video_zscore=per_video_zscore,
+        )
+
+        seg_scores_all[s:e] = local_scores
+
+        if (vid_idx % verbose_every == 0) or (vid_idx == len(nalist) - 1):
+            print(f"[LOCAL {vid_idx+1}/{len(nalist)}] done, T={e-s}")
+
+    if gt_mode == "segment":
+        y_true = seg_gt
+        y_score = seg_scores_all
+    else:
+        y_true = np.asarray(gt).reshape(-1)
+        y_score = np.repeat(seg_scores_all, frame_repeat)
+
+    auc = roc_auc_score(y_true, y_score)
+    ap = average_precision_score(y_true, y_score)
+
+    return {
+        "auc": float(auc),
+        "ap": float(ap),
+        "seg_scores_all": seg_scores_all,
+    }
+
+
+# ----------------------------------------------------------------------------------------------------------------
+
+
 
 def _tea_update_one_video(
     x_video,          # torch tensor, (T_i, 1024)
@@ -305,11 +532,17 @@ def _tea_update_one_video(
     model,
     q=0.2,
     min_keep=8,
+    min_run = 2,
     sgld_steps=10,
     sgld_lr=0.05,
     sgld_noise=0.01,
     tea_lr=1e-3,
     tea_steps_per_video=1,
+
+    # local prototype을 E_real로 선택하는 실험용 인자들
+    selection_mode="score",   # "score", "prototype", "hybrid"
+    n_reference=5,
+    proto_l2_normalize=False,
 ):
     """
     비디오 하나에 대해 adapter_episode.ln만 업데이트.
@@ -346,6 +579,54 @@ def _tea_update_one_video(
         prob = prob.squeeze(-1)    # (T_i,)
         logit = logit.squeeze(-1)  # (T_i,)
 
+
+        # local prototype을 normal 후보를 뽑는 데에 도움을 받자 실험용 
+        # 1) normal 후보 선택
+        if selection_mode == "score":
+            thresh = torch.quantile(prob, q)
+            mask = prob <= thresh
+            num_selected = int(mask.sum().item())
+            proto_dists = None
+
+        elif selection_mode == "prototype":
+            mask, proto_dists, thresh, num_selected = _select_mask_by_local_prototype(
+                x_video=x_video,
+                q=q,
+                min_keep=min_keep,
+                n_reference=n_reference,
+                min_run=min_run,
+                l2_normalize=proto_l2_normalize,
+            )
+
+        elif selection_mode == "hybrid":
+            # detector low-score AND prototype-near 둘 다 만족하는 샘플만 사용
+            thresh_score = torch.quantile(prob, q)
+            mask_score = prob <= thresh_score
+
+            mask_proto, proto_dists, thresh_proto, _ = _select_mask_by_local_prototype(
+                x_video=x_video,
+                q=q,
+                min_keep=min_keep,
+                n_reference=n_reference,
+                min_run=min_run,
+                l2_normalize=proto_l2_normalize,
+            )
+
+            mask = mask_score & mask_proto
+            num_selected = int(mask.sum().item())
+
+            # 너무 적으면 prototype 쪽만 fallback
+            if num_selected < min_keep:
+                mask = mask_proto
+                num_selected = int(mask.sum().item())
+
+            thresh = thresh_proto
+
+        else:
+            raise ValueError(f"Unknown selection_mode: {selection_mode}")
+
+        '''
+        # 기존 basic TEA 용
         thresh = torch.quantile(prob, q)
         mask = prob <= thresh
         num_selected = int(mask.sum().item())
@@ -359,6 +640,27 @@ def _tea_update_one_video(
             })
             break
 
+        '''
+
+        ''' # 연속된 후보 normal만 선택하는 엄격한 normal 선택 전략 실험용 
+        mask, thresh, num_selected = _select_normal_mask_strict(
+            prob=prob,
+            q=q,
+            min_keep=min_keep,
+            min_run=min_run,
+        )
+
+        if num_selected < min_keep:
+            debug.append({
+                "step": step_idx,
+                "skipped": True,
+                "num_selected": num_selected,
+                "threshold": float(thresh.item()),
+                "reason": "too_few_selected_after_strict_mask",
+            })
+            break
+
+        '''
         x_sel = x_video[mask].detach()      # (N,1024)
         prob_sel = prob[mask].detach()
         logit_sel = logit[mask].detach()
@@ -394,7 +696,7 @@ def _tea_update_one_video(
         E_fake = F.softplus(logit_fake).mean()
 
         # 4) TEA loss = E_real - E_fake
-        loss = E_real - E_fake
+        loss = F.relu(E_real - E_fake)
 
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -411,6 +713,13 @@ def _tea_update_one_video(
             "prob_mean": float(prob.mean().item()),
             "prob_sel_mean": float(prob_sel.mean().item()),
             "logit_sel_mean": float(logit_sel.mean().item()),
+            #"min_run": int(min_run),
+            "selection_mode": selection_mode,
+            "proto_dist_sel_mean": (
+                float(proto_dists[mask].mean().item())
+                if (proto_dists is not None and int(mask.sum().item()) > 0)
+                else None
+            ),
         })
 
     return adapter_episode, debug
@@ -436,6 +745,12 @@ def eval_xd_with_episodic_tea(
     sgld_noise=0.01,
     tea_lr=1e-3,
     tea_steps_per_video=1,
+
+    min_run = 2,
+
+    selection_mode="score",
+    n_reference=5,
+    proto_l2_normalize=False,
 
     verbose_every=100,
 ):
@@ -465,7 +780,7 @@ def eval_xd_with_episodic_tea(
         # 비디오마다 adapter 리셋
         adapter_episode = copy.deepcopy(adapter).to(device)
         adapter_episode.eval()
-
+        
         # 1) optional TEA
         if use_tea:
             adapter_episode, debug = _tea_update_one_video(
@@ -474,14 +789,19 @@ def eval_xd_with_episodic_tea(
                 model=model,
                 q=q,
                 min_keep=min_keep,
+                min_run=min_run,
                 sgld_steps=sgld_steps,
                 sgld_lr=sgld_lr,
                 sgld_noise=sgld_noise,
                 tea_lr=tea_lr,
                 tea_steps_per_video=tea_steps_per_video,
+                selection_mode=selection_mode,
+                n_reference=n_reference,
+                proto_l2_normalize=proto_l2_normalize,
             )
         else:
             debug = None
+        
 
         # 2) adaptation 후 최종 inference
         adapter_episode.eval()
@@ -646,15 +966,15 @@ if __name__ == '__main__':
     #변경(추가) 부분. 1024 차원으로 들어오는 TEST 데이터 -> 2048 
     adapter = CopyPlusExtraAdapter(d=1024, use_ln=True).to(device)
     #adapter = ResidualAdapter2048(d = 2048, use_ln = True).to(device)
-    torch.save(adapter.state_dict(), "adapter_init.pt") #baseline adapter 고정(저장) - 초기 1번만
+    #torch.save(adapter.state_dict(), "adapter_init.pt") #baseline adapter 고정(저장) - 초기 1번만
     adapter.load_state_dict(torch.load("adapter_init.pt",  map_location=device))
     adapter.eval()
 
     # 3. model
     model = Model_V2(args.feature_size).to(device)
     #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../C2FPL/ckpt/UCFfinal(git).pkl').items()})
-    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('unsupervised_ckpt/UCF_final_20260218_165841_tgkaplua.pkl').items()})  #train from scratch and evaluate
-    #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_final_20260301_031008_pgn3aode.pkl').items()}) #weaklysupervised
+    #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('unsupervised_ckpt/UCF_final_20260218_165841_tgkaplua.pkl').items()})  #train from scratch and evaluate
+    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_final_20260311_191256_sfs4jnk1.pkl').items()}) #weaklysupervised
     model.eval()
     
 
@@ -691,6 +1011,57 @@ if __name__ == '__main__':
     print("AUC:", res_base["auc"])
     print("AP :", res_base["ap"])
 
+    '''
+    # 4-1. local prototype only
+    res_local = eval_xd_local_prototype_only(
+        X_flat=X_flat,
+        nalist=nalist,
+        gt=gt,
+        frame_repeat=16,
+        n_reference=1,
+        l2_normalize=False,
+        per_video_zscore=False,
+        verbose_every=100,
+    )
+    print("\n[LOCAL PROTOTYPE ONLY]")
+    print("AUC:", res_local["auc"])
+    print("AP :", res_local["ap"])
+    '''
+
+    # local proto를 E_real로
+    res_tea_proto = eval_xd_with_episodic_tea(
+        X_flat=X_flat,
+        nalist=nalist,
+        gt=gt,
+        adapter=adapter,
+        model=model,
+        device=device,
+        frame_repeat=16,
+
+        use_tea=True,
+        q=0.05,
+        min_keep=8,
+        #min_run=2,
+        sgld_steps=10,
+        sgld_lr=0.05,
+        sgld_noise=0.01,
+        tea_lr=5e-5,
+        tea_steps_per_video=30,
+
+        selection_mode="score",
+        n_reference=5,
+        proto_l2_normalize=False,
+
+        verbose_every=100,
+    )
+
+    print("\n[TEA + LOCAL-PROTOTYPE SELECTION]")
+    print("AUC:", res_tea_proto["auc"])
+    print("AP :", res_tea_proto["ap"])
+
+
+
+    '''
     # 5. episodic TEA
     res_tea = eval_xd_with_episodic_tea(
         X_flat=X_flat,
@@ -703,16 +1074,18 @@ if __name__ == '__main__':
         use_tea=True,
         q=0.05,
         min_keep=8,
+        min_run=2,
         sgld_steps=10,
         sgld_lr=0.05,
         sgld_noise=0.01,
-        tea_lr=1e-3,
+        tea_lr=5e-5,
         tea_steps_per_video=1,
         verbose_every=100,
     )
     print("\n[EPISODIC TEA]")
     print("AUC:", res_tea["auc"])
     print("AP :", res_tea["ap"])
+    
 
     #부트스트랩으로 확인
     boot_res = bootstrap_video_ci(
@@ -724,5 +1097,6 @@ if __name__ == '__main__':
         n_boot=1000,
         seed=42,
     )
+    '''
     #scores = test(test_loader, model, args, device) #UCF
     #scores = test_2(test_loader, model, adapter, args, device) #XD

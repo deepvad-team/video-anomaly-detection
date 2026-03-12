@@ -31,14 +31,14 @@ def main():
 
     # 1) extractor model
     i3d_model = load_i3d_model(
-        r"C:\\Users\\jplabuser\\I3D_Feature_Extraction_resnet\\pretrained\\i3d_r50_kinetics.pth"
+        r"C:\\Users\\jplabuser\\I3D_Feature_Extraction_resnet\\pretrained\\i3d_r50_nl_kinetics.pth"
     )
     print("I3D model loaded.")
 
 
     # 2) detector
     detector = load_detector(
-        r"C:\\Users\\jplabuser\\minjeong\\unsupervised_ckpt\\UCF_final_20260301_031008_pgn3aode.pkl",
+        r"C:\\Users\\jplabuser\\C2FPL_EVAL\\C2FPL\\unsupervised_ckpt\\UCF_final_20260218_165841_tgkaplua.pkl",
         device=device,
         feature_size=2048
     )
