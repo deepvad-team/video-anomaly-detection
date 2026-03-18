@@ -279,10 +279,9 @@ def inspect_video_energy_terms(
         "prob_fake_mean": float(prob_fake.mean().item()),
     }
 
-# ---------------------------
+# ---------------------------------------------------------------------------------
 # TEA helper (episodic)
-# ---------------------------
-
+# ---------------------------------------------------------------------------------
 
 
 # 정상 후보 선택 시 연속된 segment인 경우만 뽑도록 기준을 강화하는 실험용 helper 함수들 ------------------------------------------------------------------------
@@ -307,6 +306,7 @@ def _find_consecutive_true_runs(mask_np, min_run=2):
         idx.extend(range(start, len(mask_np)))
 
     return idx
+
 def _select_normal_mask_strict(prob, q=0.1, min_keep=8, min_run=2):
     """
     더 엄격한 normal 후보 선택:
@@ -359,6 +359,49 @@ def _segment_gt_from_gt(gt, total_T, frame_repeat=16):
             f"expected {total_T} or {total_T * frame_repeat}"
         )
     return seg_gt, gt_mode
+
+
+
+# prefix warm-up 실험을 위한 helper 함수들 (앞 5개 segment로 적응, 평가에서는 제외) ------------------------------------------------------------------------
+
+def _split_prefix_suffix_video(x_video, warmup_segments=5):
+    """
+    x_video: torch tensor, (T, D)
+    return:
+      x_prefix: adaptation용
+      prefix_len: 실제 prefix 길이
+    """
+    T = x_video.shape[0]
+    prefix_len = min(warmup_segments, T)
+    x_prefix = x_video[:prefix_len]
+    return x_prefix, prefix_len
+
+
+def _build_eval_mask_from_nalist(total_T, nalist, warmup_segments=5):
+    """
+    비디오별 prefix는 False, suffix는 True
+    """
+    eval_mask_seg = np.zeros(total_T, dtype=bool)
+
+    for i in range(len(nalist)):
+        s, e = nalist[i]
+        s, e = int(s), int(e)
+        prefix_len = min(warmup_segments, e - s)
+
+        if e - s <= prefix_len:
+            continue
+
+        eval_mask_seg[s + prefix_len : e] = True
+
+    return eval_mask_seg
+# ----------------------------------------------------------------------------------------------------------------
+
+
+
+
+
+
+
 
 # local prototype을 E_real 로 선택하는 실험용 helper 함수들 ------------------------------------------------------------------------
 
@@ -526,13 +569,17 @@ def eval_xd_local_prototype_only(
 
 
 
+
+
+
+
 def _tea_update_one_video(
     x_video,          # torch tensor, (T_i, 1024)
     adapter_episode,
     model,
     q=0.2,
     min_keep=8,
-    min_run = 2,
+    min_run=2,
     sgld_steps=10,
     sgld_lr=0.05,
     sgld_noise=0.01,
@@ -543,6 +590,10 @@ def _tea_update_one_video(
     selection_mode="score",   # "score", "prototype", "hybrid"
     n_reference=5,
     proto_l2_normalize=False,
+
+    # prefix only adaptation & suffix evaluation 을 위한 인자들
+    adapt_prefix_only=False,
+    warmup_segments=5,
 ):
     """
     비디오 하나에 대해 adapter_episode.ln만 업데이트.
@@ -571,10 +622,35 @@ def _tea_update_one_video(
     debug = []
 
     for step_idx in range(tea_steps_per_video):
+        # ---------------------------
+        # adaptation pool 결정
+        # ---------------------------
+        if adapt_prefix_only:
+            x_adapt, prefix_len = _split_prefix_suffix_video(
+                x_video, warmup_segments=warmup_segments
+            )
+        else:
+            x_adapt = x_video
+            prefix_len = x_video.shape[0]
+
+        if x_adapt.shape[0] == 0:
+            debug.append({
+                "step": step_idx,
+                "skipped": True,
+                "reason": "empty_adaptation_pool",
+            })
+            break
+
+
         # 1) 현재 비디오 baseline score
         with torch.no_grad():
-            x_2048 = adapter_episode(x_video)
-            prob, logit = model(x_2048, return_logits=True)
+            #x_2048 = adapter_episode(x_video)
+
+            # 이제부터 selection은 x_video 전체가 아니라 x_adapt에서만 하게 됨. 물론 adapt_prefix_only=False여서
+            # x_adapt가 전체 비디오 x_video 로 들어올 수는 있음. 즉 조절 가능!
+            x_2048 = adapter_episode(x_adapt)    
+
+            prob, logit = model(x_2048, return_logits=True)     # x_adapt에 대한 prob, logit 얻어옴.
 
         prob = prob.squeeze(-1)    # (T_i,)
         logit = logit.squeeze(-1)  # (T_i,)
@@ -590,7 +666,7 @@ def _tea_update_one_video(
 
         elif selection_mode == "prototype":
             mask, proto_dists, thresh, num_selected = _select_mask_by_local_prototype(
-                x_video=x_video,
+                x_video=x_adapt,
                 q=q,
                 min_keep=min_keep,
                 n_reference=n_reference,
@@ -604,7 +680,7 @@ def _tea_update_one_video(
             mask_score = prob <= thresh_score
 
             mask_proto, proto_dists, thresh_proto, _ = _select_mask_by_local_prototype(
-                x_video=x_video,
+                x_video=x_adapt,   
                 q=q,
                 min_keep=min_keep,
                 n_reference=n_reference,
@@ -661,7 +737,7 @@ def _tea_update_one_video(
             break
 
         '''
-        x_sel = x_video[mask].detach()      # (N,1024)
+        x_sel = x_adapt[mask].detach()      # (N,1024)  # 정상 후보로 선택된 샘플
         prob_sel = prob[mask].detach()
         logit_sel = logit[mask].detach()
 
@@ -713,20 +789,27 @@ def _tea_update_one_video(
             "prob_mean": float(prob.mean().item()),
             "prob_sel_mean": float(prob_sel.mean().item()),
             "logit_sel_mean": float(logit_sel.mean().item()),
-            #"min_run": int(min_run),
+            "min_run": int(min_run),
             "selection_mode": selection_mode,
             "proto_dist_sel_mean": (
                 float(proto_dists[mask].mean().item())
                 if (proto_dists is not None and int(mask.sum().item()) > 0)
                 else None
             ),
+            "adapt_prefix_only": adapt_prefix_only,
+            "prefix_len": int(prefix_len),
+            "adapt_pool_size": int(x_adapt.shape[0]),
         })
 
     return adapter_episode, debug
 
-# ---------------------------
+
+
+
+
+# ---------------------------------------------------------------------------------
 # 전체 xd evaluation용 함수
-# ---------------------------
+# ---------------------------------------------------------------------------------
 
 def eval_xd_with_episodic_tea(
     X_flat,              # numpy, (total_T, 1024)
@@ -740,17 +823,20 @@ def eval_xd_with_episodic_tea(
     use_tea=True,
     q=0.2,
     min_keep=8,
+    min_run = 2,
     sgld_steps=10,
     sgld_lr=0.05,
     sgld_noise=0.01,
     tea_lr=1e-3,
     tea_steps_per_video=1,
 
-    min_run = 2,
-
     selection_mode="score",
     n_reference=5,
     proto_l2_normalize=False,
+
+    exclude_prefix_from_eval=False,
+    adapt_prefix_only=False,
+    warmup_segments=5,
 
     verbose_every=100,
 ):
@@ -798,6 +884,8 @@ def eval_xd_with_episodic_tea(
                 selection_mode=selection_mode,
                 n_reference=n_reference,
                 proto_l2_normalize=proto_l2_normalize,
+                adapt_prefix_only=adapt_prefix_only,
+                warmup_segments=warmup_segments,
             )
         else:
             debug = None
@@ -825,13 +913,31 @@ def eval_xd_with_episodic_tea(
             print(f"[{vid_idx+1}/{len(nalist)}] done, T={e-s}")
 
     # 3) metric 계산
+    if exclude_prefix_from_eval:
+        eval_mask_seg = _build_eval_mask_from_nalist(
+            total_T=total_T,
+            nalist=nalist,
+            warmup_segments=warmup_segments,
+        )
+    else:
+        eval_mask_seg = np.ones(total_T, dtype=bool)
+
     if gt_mode == "segment":
-        y_true = seg_gt
-        y_score = seg_scores_all
+        y_true = seg_gt[eval_mask_seg]
+        y_score = seg_scores_all[eval_mask_seg]
     else:
         # segment score를 16배 반복해서 frame-level score로 맞춤
         y_true = np.asarray(gt).reshape(-1)
         y_score = np.repeat(seg_scores_all, frame_repeat)
+        eval_mask_frame = np.repeat(eval_mask_seg, frame_repeat)
+
+        min_len = min(len(y_true), len(y_score), len(eval_mask_frame))
+        y_true = y_true[:min_len]
+        y_score = y_score[:min_len]
+        eval_mask_frame = eval_mask_frame[:min_len]
+
+        y_true = y_true[eval_mask_frame]
+        y_score = y_score[eval_mask_frame]
 
     auc = roc_auc_score(y_true, y_score)
     ap = average_precision_score(y_true, y_score)
@@ -841,10 +947,12 @@ def eval_xd_with_episodic_tea(
         "ap": float(ap),
         "seg_scores_all": seg_scores_all,
         "tea_logs": tea_logs,
+        "eval_mask_seg": eval_mask_seg,
     }
 
-import numpy as np
-from sklearn.metrics import roc_auc_score, average_precision_score
+
+
+
 
 def bootstrap_video_ci(
     seg_scores_base,     # (total_T,)
@@ -854,6 +962,8 @@ def bootstrap_video_ci(
     frame_repeat=16,
     n_boot=1000,
     seed=42,
+    exclude_prefix_from_eval=False,
+    warmup_segments=5,
 ):
     rng = np.random.default_rng(seed)
 
@@ -888,16 +998,28 @@ def bootstrap_video_ci(
 
         for vid_idx in boot_vids:
             s, e = nalist[vid_idx]
+            s, e = int(s), int(e)
+
+            if exclude_prefix_from_eval:
+                prefix_len = min(warmup_segments, e - s)
+                s_eval = s + prefix_len
+                e_eval = e
+            else:
+                s_eval = s
+                e_eval = e
+
+            if s_eval >= e_eval:
+                continue
 
             if gt_mode == "segment":
-                y_true_parts.append(seg_gt[s:e])
-                y_base_parts.append(seg_scores_base[s:e])
-                y_tea_parts.append(seg_scores_tea[s:e])
+                y_true_parts.append(seg_gt[s_eval:e_eval])
+                y_base_parts.append(seg_scores_base[s_eval:e_eval])
+                y_tea_parts.append(seg_scores_tea[s_eval:e_eval])
             else:
                 # frame-level metric과 맞추기 위해 segment score를 16번 반복
-                y_true_parts.append(gt[s*frame_repeat:e*frame_repeat])
-                y_base_parts.append(np.repeat(seg_scores_base[s:e], frame_repeat))
-                y_tea_parts.append(np.repeat(seg_scores_tea[s:e], frame_repeat))
+                y_true_parts.append(gt[s_eval*frame_repeat:e_eval*frame_repeat])
+                y_base_parts.append(np.repeat(seg_scores_base[s_eval:e_eval], frame_repeat))
+                y_tea_parts.append(np.repeat(seg_scores_tea[s_eval:e_eval], frame_repeat))
 
         y_true = np.concatenate(y_true_parts)
         y_base = np.concatenate(y_base_parts)
@@ -932,9 +1054,13 @@ def bootstrap_video_ci(
         "ap_ci95": ap_ci,
     }
 
-# ---------------------------
+
+
+
+
+# ---------------------------------------------------------------------------------
 # Main test loop
-# ---------------------------
+# ---------------------------------------------------------------------------------
 
 if __name__ == '__main__':
     args = option.parser.parse_args()
@@ -972,9 +1098,9 @@ if __name__ == '__main__':
 
     # 3. model
     model = Model_V2(args.feature_size).to(device)
-    #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../C2FPL/ckpt/UCFfinal(git).pkl').items()})
+    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../C2FPL/ckpt/UCFfinal(git).pkl').items()})
     #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('unsupervised_ckpt/UCF_final_20260218_165841_tgkaplua.pkl').items()})  #train from scratch and evaluate
-    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_final_20260311_191256_sfs4jnk1.pkl').items()}) #weaklysupervised
+    #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_final_20260311_191256_sfs4jnk1.pkl').items()}) #weaklysupervised
     model.eval()
     
 
@@ -995,7 +1121,7 @@ if __name__ == '__main__':
     )    print(res0)
     '''
     
-    #4. baseline (adapter만, TEA 없음)
+    #4. baseline (adapter로 차원만, TEA 없음)
     res_base = eval_xd_with_episodic_tea(
         X_flat=X_flat,
         nalist=nalist,
@@ -1004,12 +1130,15 @@ if __name__ == '__main__':
         model=model,
         device=device,
         frame_repeat=16,
+
         use_tea=False,
         verbose_every=100,
     )
     print("\n[BASELINE]")
     print("AUC:", res_base["auc"])
     print("AP :", res_base["ap"])
+
+
 
     '''
     # 4-1. local prototype only
@@ -1028,8 +1157,11 @@ if __name__ == '__main__':
     print("AP :", res_local["ap"])
     '''
 
-    # local proto를 E_real로
-    res_tea_proto = eval_xd_with_episodic_tea(
+
+    '''
+    # 4-2. 전체 비디오 활용하는 offline adaptation
+    # local proto, score, hybrid selection mode 로 E_real 선택
+    res_tea_whole = eval_xd_with_episodic_tea(
         X_flat=X_flat,
         nalist=nalist,
         gt=gt,
@@ -1040,30 +1172,29 @@ if __name__ == '__main__':
 
         use_tea=True,
         q=0.05,
-        min_keep=8,
-        #min_run=2,
+        min_keep=10,
+        min_run=2,
         sgld_steps=10,
         sgld_lr=0.05,
         sgld_noise=0.01,
-        tea_lr=5e-5,
-        tea_steps_per_video=30,
+        tea_lr=1e-2,
+        tea_steps_per_video=10,
 
-        selection_mode="score",
+        selection_mode="hybrid",
         n_reference=5,
-        proto_l2_normalize=False,
+        proto_l2_normalize=True,
 
         verbose_every=100,
     )
 
     print("\n[TEA + LOCAL-PROTOTYPE SELECTION]")
-    print("AUC:", res_tea_proto["auc"])
-    print("AP :", res_tea_proto["ap"])
-
-
-
+    print("AUC:", res_tea_whole["auc"])
+    print("AP :", res_tea_whole["ap"])
     '''
-    # 5. episodic TEA
-    res_tea = eval_xd_with_episodic_tea(
+
+
+    # 4-3. warm up baseline (prefix 적응은 안하지만 suffix만 평가)
+    res_base_warm = eval_xd_with_episodic_tea(
         X_flat=X_flat,
         nalist=nalist,
         gt=gt,
@@ -1071,26 +1202,82 @@ if __name__ == '__main__':
         model=model,
         device=device,
         frame_repeat=16,
-        use_tea=True,
-        q=0.05,
-        min_keep=8,
-        min_run=2,
-        sgld_steps=10,
-        sgld_lr=0.05,
-        sgld_noise=0.01,
-        tea_lr=5e-5,
-        tea_steps_per_video=1,
-        verbose_every=100,
+
+        use_tea=False,          
+
+        adapt_prefix_only=False,          # baseline -> 적응 안 함
+        exclude_prefix_from_eval=True,    # suffix만 평가
+        warmup_segments=20,
     )
-    print("\n[EPISODIC TEA]")
-    print("AUC:", res_tea["auc"])
-    print("AP :", res_tea["ap"])
+
+    print("\n[BASELINE - SUFFIX ONLY]")
+    print("AUC:", res_base_warm["auc"])
+    print("AP :", res_base_warm["ap"])
+
+
+    # 4-4. warm up (prefix 적응, suffix만 평가)
+    res_tea_warm = eval_xd_with_episodic_tea(
+    X_flat=X_flat,
+    nalist=nalist,
+    gt=gt,
+    adapter=adapter,
+    model=model,
+    device=device,
+    frame_repeat=16,
+
+    use_tea=True,
+
+    q=0.25,
+    min_keep=8,
+    #min_run은 여기선 의미 없음!
+    tea_lr=1e-2,
+    tea_steps_per_video=12,
+    selection_mode="score",
+
+    adapt_prefix_only=True,           # prefix 안에서만 selection/update
+    exclude_prefix_from_eval=True,    # suffix만 평가
+    warmup_segments=10,                # adaptation pool 지정 (prefix)
+    )
+
+    print("\n[PREFIX WARM-UP TEA]")
+    print("AUC:", res_tea_warm["auc"])
+    print("AP :", res_tea_warm["ap"])
+
     
 
+    num_eval_seg = int(res_tea_warm["eval_mask_seg"].sum())
+    num_total_seg = int(len(res_tea_warm["eval_mask_seg"]))
+    print("evaluated segments:", num_eval_seg, "/", num_total_seg)  # 전체 비디오 800개 * 5 = 4000개 빼고 eval 됐어야 함. 
+
+    print("\n[CHECK DEBUG: first 5 videos]")
+    for i in range(min(5, len(res_tea_warm["tea_logs"]))):
+        item = res_tea_warm["tea_logs"][i]
+        dbg = item["debug"]
+
+        print(f"\nVideo {i}")
+        if dbg is None or len(dbg) == 0:
+            print("  no debug")
+            continue
+
+        first = dbg[0]
+        print("  adapt_prefix_only:", first.get("adapt_prefix_only"))
+        print("  prefix_len       :", first.get("prefix_len"))
+        print("  adapt_pool_size  :", first.get("adapt_pool_size"))
+        print("  num_selected     :", first.get("num_selected"))  # 최종적으로 적응에 사용된 segment 개수
+        print("  selection_mode   :", first.get("selection_mode"))
+        print("  E_real           :", first.get("E_real"))
+        print("  E_fake           :", first.get("E_fake"))
+        print("  loss             :", first.get("loss"))
+        print("  skipped          :", first.get("skipped"))
+
+
+        
+
+    '''
     #부트스트랩으로 확인
     boot_res = bootstrap_video_ci(
         seg_scores_base=res_base["seg_scores_all"],
-        seg_scores_tea=res_tea["seg_scores_all"],
+        seg_scores_tea=res_base_warm["seg_scores_all"],
         nalist=nalist,
         gt=gt,
         frame_repeat=16,
@@ -1098,5 +1285,6 @@ if __name__ == '__main__':
         seed=42,
     )
     '''
+    
     #scores = test(test_loader, model, args, device) #UCF
     #scores = test_2(test_loader, model, adapter, args, device) #XD
