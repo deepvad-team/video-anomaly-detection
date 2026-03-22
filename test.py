@@ -227,6 +227,13 @@ def inspect_video_energy_terms(
     #    energy = softplus(logit) : normal이면 작고 anomaly면 큼
     E_real = F.softplus(logit_sel).mean()
 
+    # E_real에 가중치를 추가하자 -------------------------
+    real_energy = F.softplus(logit_sel)
+    tau = 0.5
+    # prob_sel이 낮을수록 weight 크게
+    w = torch.softmax(-prob_sel / tau, dim=0)
+    #E_real = (w * real_energy).sum()
+
     print(f"E_real = {E_real.item():.6f}")
     print(f"selected prob mean = {prob_sel.mean().item():.6f}")
     print(f"selected logit mean = {logit_sel.mean().item():.6f}")
@@ -614,6 +621,10 @@ def _tea_update_one_video(
     adapter_episode.ln.weight.requires_grad_(True)
     adapter_episode.ln.bias.requires_grad_(True)
 
+    # 추가: LN 파라미터 초기값 저장
+    ln_weight_init = adapter_episode.ln.weight.detach().clone()
+    ln_bias_init = adapter_episode.ln.bias.detach().clone()
+
     optimizer = torch.optim.Adam(
         [adapter_episode.ln.weight, adapter_episode.ln.bias],
         lr=tea_lr
@@ -772,7 +783,18 @@ def _tea_update_one_video(
         E_fake = F.softplus(logit_fake).mean()
 
         # 4) TEA loss = E_real - E_fake
-        loss = F.relu(E_real - E_fake)
+
+        #loss = F.relu(E_real - E_fake)
+
+        loss = E_real
+
+        #lambda 앵커 추가로 strong detector에서 성능 하락 방지 loss = E_real + lambda_anchor * ||ln - ln_init||^2-----------
+        lambda_anchor = 1e-4
+        anchor = ((adapter_episode.ln.weight - ln_weight_init) ** 2).sum()\
+        +  ((adapter_episode.ln.bias - ln_bias_init) ** 2).sum()
+        #loss = F.relu(E_real-E_fake) + lambda_anchor * anchor
+        #loss = E_real + lambda_anchor * anchor
+
 
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -1056,7 +1078,220 @@ def bootstrap_video_ci(
 
 
 
+import os
+import csv
+import copy
+import numpy as np
+import matplotlib.pyplot as plt
+import torch
+def frame_gt_to_segment_gt(gt_frame, total_T, frame_repeat=16):
+    gt_frame = np.asarray(gt_frame).reshape(-1)
 
+    assert len(gt_frame) == total_T * frame_repeat, \
+        f"GT length mismatch: len(gt_frame)={len(gt_frame)}, expected={total_T * frame_repeat}"
+
+    gt_seg = gt_frame.reshape(total_T, frame_repeat).max(axis=1).astype(np.int64)
+    return gt_seg
+
+def analyze_prefix_selection_score(
+    X_flat,
+    nalist,
+    gt,                  # segment-level GT 추천
+    adapter,
+    model,
+    device,
+    warmup_segments=20,
+    q=0.1,
+    frame_repeat=16,
+    video_names=None,    # optional
+    save_csv_path="prefix_selection_analysis.csv",
+):
+    """
+    warm-up prefix에서 score-based E_real selection이 실제로 얼마나 깨끗한지 분석
+    """
+    total_T = X_flat.shape[0]
+    seg_gt, gt_mode = _segment_gt_from_gt(gt, total_T, frame_repeat=frame_repeat)
+    assert gt_mode == "segment", "이 분석은 segment-level GT를 쓰는 게 가장 깔끔함"
+
+    adapter.eval()
+    model.eval()
+
+    rows = []
+    video_debug = []
+
+    for vid_idx in range(len(nalist)):
+        s, e = nalist[vid_idx]
+        s, e = int(s), int(e)
+        T = e - s
+        prefix_len = min(warmup_segments, T)
+
+        if prefix_len == 0:
+            continue
+
+        x_prefix_np = np.asarray(X_flat[s:s+prefix_len])   # (prefix_len, 1024)
+        x_prefix = torch.from_numpy(x_prefix_np).float().to(device)
+
+        with torch.no_grad():
+            x_2048 = adapter(x_prefix)
+            prob, logit = model(x_2048, return_logits=True)
+
+        prob = prob.squeeze(-1).detach().cpu().numpy()    # (prefix_len,)
+        logit = logit.squeeze(-1).detach().cpu().numpy()
+
+        thresh = np.quantile(prob, q)
+        mask = prob <= thresh
+        selected_local = np.where(mask)[0]
+
+        prefix_gt = seg_gt[s:s+prefix_len].astype(int)    # (prefix_len,)
+
+        num_selected = len(selected_local)
+        num_abn_selected = int(prefix_gt[selected_local].sum()) if num_selected > 0 else 0
+        contam_ratio = (num_abn_selected / num_selected) if num_selected > 0 else 0.0
+
+        vid_name = video_names[vid_idx] if video_names is not None else f"video_{vid_idx}"
+
+        # video-level summary
+        video_debug.append({
+            "vid_idx": vid_idx,
+            "vid_name": vid_name,
+            "prefix_len": prefix_len,
+            "threshold": float(thresh),
+            "prob": prob.copy(),
+            "logit": logit.copy(),
+            "prefix_gt": prefix_gt.copy(),
+            "selected_local": selected_local.copy(),
+            "num_selected": num_selected,
+            "num_abn_selected": num_abn_selected,
+            "contam_ratio": contam_ratio,
+        })
+
+        # sample-level rows
+        for local_idx in selected_local:
+            rows.append({
+                "vid_idx": vid_idx,
+                "vid_name": vid_name,
+                "global_idx": int(s + local_idx),
+                "local_idx_in_prefix": int(local_idx),
+                "prob": float(prob[local_idx]),
+                "logit": float(logit[local_idx]),
+                "gt_label": int(prefix_gt[local_idx]),   # 0 normal / 1 anomaly
+                "is_error": int(prefix_gt[local_idx] == 1),
+                "prefix_len": int(prefix_len),
+                "threshold": float(thresh),
+            })
+
+    # CSV 저장
+    if save_csv_path is not None and len(rows) > 0:
+        with open(save_csv_path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+
+    # 전체 요약 출력
+    total_selected = len(rows)
+    total_errors = sum(r["is_error"] for r in rows)
+    contam_ratio_all = total_errors / total_selected if total_selected > 0 else 0.0
+    contaminated_videos = sum(1 for d in video_debug if d["num_abn_selected"] > 0)
+
+    print("\n[Prefix Selection Analysis]")
+    print("num videos:", len(video_debug))
+    print("total selected samples:", total_selected)
+    print("total anomalous selected:", total_errors)
+    print("overall contamination ratio:", contam_ratio_all)
+    print("videos with at least one anomalous selected sample:", contaminated_videos)
+
+    # 위치 분포 출력
+    if total_selected > 0:
+        pos_counts = {}
+        for r in rows:
+            k = r["local_idx_in_prefix"]
+            pos_counts[k] = pos_counts.get(k, 0) + 1
+
+        print("\nselected position counts within prefix:")
+        for k in sorted(pos_counts.keys()):
+            print(f"  pos {k}: {pos_counts[k]}")
+
+    return rows, video_debug
+
+
+def plot_prefix_selection_examples(
+    video_debug,
+    save_dir="prefix_selection_plots",
+    top_k=10,
+    mode="worst",   # "worst" contamination 높은 비디오부터
+):
+    os.makedirs(save_dir, exist_ok=True)
+
+    if mode == "worst":
+        video_debug = sorted(video_debug, key=lambda x: (-x["contam_ratio"], -x["num_abn_selected"]))
+    elif mode == "best":
+        video_debug = sorted(video_debug, key=lambda x: (x["contam_ratio"], x["num_abn_selected"]))
+
+    chosen = video_debug[:top_k]
+
+    for d in chosen:
+        prob = d["prob"]
+        prefix_gt = d["prefix_gt"]
+        selected_local = d["selected_local"]
+        thresh = d["threshold"]
+        vid_name = d["vid_name"]
+
+        x = np.arange(len(prob))
+
+        plt.figure(figsize=(8, 4))
+        plt.plot(x, prob, marker="o")
+        plt.axhline(thresh, linestyle="--")
+
+        # GT anomaly segment는 빨간 음영
+        for i, g in enumerate(prefix_gt):
+            if g == 1:
+                plt.axvspan(i - 0.5, i + 0.5, alpha=0.2, color="red")
+
+        # 선택된 segment는 초록 점
+        if len(selected_local) > 0:
+            plt.scatter(selected_local, prob[selected_local], s=80)
+
+        plt.title(f"{vid_name}\nselected={len(selected_local)}, contam={d['num_abn_selected']}/{d['num_selected']}")
+        plt.xlabel("segment index in prefix")
+        plt.ylabel("pre-adaptation anomaly score")
+        plt.tight_layout()
+
+        save_path = os.path.join(save_dir, f"{vid_name[:80].replace('/', '_')}.png")
+        plt.savefig(save_path, dpi=150)
+        plt.close()
+
+    print(f"\nSaved plots to: {save_dir}")
+   
+def normalize_name(x):
+    x = x.strip()
+
+    # Windows 경로까지 들어와도 basename 추출되게
+    x = x.replace("\\", "/")
+    x = x.split("/")[-1]
+
+    # .npy / .mp4 제거
+    if x.endswith(".npy"):
+        x = x[:-4]
+    elif x.endswith(".mp4"):
+        x = x[:-4]
+
+    # annotation 쪽에 붙어 있는 v= 제거
+    if x.startswith("v="):
+        x = x[2:]
+
+    return x 
+def load_video_names(list_path):
+    names = []
+    with open(list_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+
+            name = normalize_name(line)
+            names.append(name)
+
+    return names
 
 # ---------------------------------------------------------------------------------
 # Main test loop
@@ -1070,8 +1305,9 @@ if __name__ == '__main__':
     gt = np.load(args.gt)
         #변경 (추가) 부분: (145649, 1024) 데이터 그대로 일단 받아오기
     xd_dataset = Dataset_Con_all_feedback_XD(args, test_mode=True)
+    #ucf_dataset = Dataset_Con_all_feedback_UCF(args, test_mode=True)
     X_flat = xd_dataset.con_all
-    nalist = np.load("list/nalist_XD_test.npy")
+    nalist = np.load("list/nalist_XD_test_R50NL.npy")
     print("X_flat shape:", X_flat.shape)
     print("nalist shape:", nalist.shape)
 
@@ -1090,17 +1326,17 @@ if __name__ == '__main__':
    
     # 2. adapter
     #변경(추가) 부분. 1024 차원으로 들어오는 TEST 데이터 -> 2048 
-    adapter = CopyPlusExtraAdapter(d=1024, use_ln=True).to(device)
-    #adapter = ResidualAdapter2048(d = 2048, use_ln = True).to(device)
+    #adapter = CopyPlusExtraAdapter(d=1024, use_ln=True).to(device)
+    adapter = ResidualAdapter2048(d = 2048, use_ln = True).to(device)
     #torch.save(adapter.state_dict(), "adapter_init.pt") #baseline adapter 고정(저장) - 초기 1번만
     adapter.load_state_dict(torch.load("adapter_init.pt",  map_location=device))
     adapter.eval()
 
     # 3. model
     model = Model_V2(args.feature_size).to(device)
-    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../C2FPL/ckpt/UCFfinal(git).pkl').items()})
+    #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../C2FPL/ckpt/UCFfinal(git).pkl').items()})
     #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('unsupervised_ckpt/UCF_final_20260218_165841_tgkaplua.pkl').items()})  #train from scratch and evaluate
-    #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_final_20260311_191256_sfs4jnk1.pkl').items()}) #weaklysupervised
+    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_final_20260311_191256_sfs4jnk1.pkl').items()})
     model.eval()
     
 
@@ -1120,7 +1356,7 @@ if __name__ == '__main__':
         sgld_noise=0.01,
     )    print(res0)
     '''
-    
+    '''
     #4. baseline (adapter로 차원만, TEA 없음)
     res_base = eval_xd_with_episodic_tea(
         X_flat=X_flat,
@@ -1137,7 +1373,7 @@ if __name__ == '__main__':
     print("\n[BASELINE]")
     print("AUC:", res_base["auc"])
     print("AP :", res_base["ap"])
-
+    '''
 
 
     '''
@@ -1192,7 +1428,7 @@ if __name__ == '__main__':
     print("AP :", res_tea_whole["ap"])
     '''
 
-
+    
     # 4-3. warm up baseline (prefix 적응은 안하지만 suffix만 평가)
     res_base_warm = eval_xd_with_episodic_tea(
         X_flat=X_flat,
@@ -1207,14 +1443,14 @@ if __name__ == '__main__':
 
         adapt_prefix_only=False,          # baseline -> 적응 안 함
         exclude_prefix_from_eval=True,    # suffix만 평가
-        warmup_segments=20,
+        warmup_segments=5,
     )
 
     print("\n[BASELINE - SUFFIX ONLY]")
     print("AUC:", res_base_warm["auc"])
     print("AP :", res_base_warm["ap"])
 
-
+    
     # 4-4. warm up (prefix 적응, suffix만 평가)
     res_tea_warm = eval_xd_with_episodic_tea(
     X_flat=X_flat,
@@ -1227,24 +1463,48 @@ if __name__ == '__main__':
 
     use_tea=True,
 
-    q=0.25,
+    q=1.0,   
     min_keep=8,
     #min_run은 여기선 의미 없음!
-    tea_lr=1e-2,
-    tea_steps_per_video=12,
+    tea_lr=1e-3,
+    tea_steps_per_video=10,
     selection_mode="score",
 
     adapt_prefix_only=True,           # prefix 안에서만 selection/update
     exclude_prefix_from_eval=True,    # suffix만 평가
-    warmup_segments=10,                # adaptation pool 지정 (prefix)
+    warmup_segments=5,                # adaptation pool 지정 (prefix)
     )
 
     print("\n[PREFIX WARM-UP TEA]")
     print("AUC:", res_tea_warm["auc"])
     print("AP :", res_tea_warm["ap"])
-
     
+    # 비디오 이름이 있으면 같이 넣기
+    video_names = load_video_names("list/XD_rgb_test_R50NL.list")   # 아까 만든 함수 그대로 사용
+    total_T = int(nalist[-1, 1])
+    gt_seg = frame_gt_to_segment_gt(gt, total_T, frame_repeat=16)
 
+    rows, video_debug = analyze_prefix_selection_score(
+        X_flat=X_flat,
+        nalist=nalist,
+        gt=gt_seg,
+        adapter=adapter,
+        model=model,
+        device=device,
+        warmup_segments=5,
+        q=0.1,
+        frame_repeat=16,
+        video_names=video_names,
+        save_csv_path="prefix_selection_analysis_q03.csv",
+    )
+
+    plot_prefix_selection_examples(
+        video_debug,
+        save_dir="prefix_selection_plots_q03",
+        top_k=15,
+        mode="worst",
+    )
+    '''
     num_eval_seg = int(res_tea_warm["eval_mask_seg"].sum())
     num_total_seg = int(len(res_tea_warm["eval_mask_seg"]))
     print("evaluated segments:", num_eval_seg, "/", num_total_seg)  # 전체 비디오 800개 * 5 = 4000개 빼고 eval 됐어야 함. 
@@ -1269,7 +1529,7 @@ if __name__ == '__main__':
         print("  E_fake           :", first.get("E_fake"))
         print("  loss             :", first.get("loss"))
         print("  skipped          :", first.get("skipped"))
-
+    '''
 
         
 

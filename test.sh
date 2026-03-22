@@ -6,11 +6,11 @@ python test.py \
     --batch-size 128 \
     --lr 0.01\
     --feature-size 2048 \
-    --gt list/gt-XD.npy\
+    --gt list/gt-XD-R50NL.npy\
     --datasetname XD \
     --windowsize 0.15\
     --eps 0.225 \
     --eps2 1.32475  \
     --pseudofile ../../C2FPL/Unsup_labels/UCF_unsup_labels_original_New_V88_1.5.npy\
     --conall concat_UCF\
-    --xd_feat concat_XD_test.npy
+    --xd_feat concat_XD_test_R50NL.npy

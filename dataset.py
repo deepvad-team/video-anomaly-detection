@@ -56,17 +56,17 @@ class Dataset_Con_all_feedback_XD(data.Dataset):
         self.is_normal = is_normal
         self.transform = transform
         self.test_mode = test_mode
-        nalist = np.load('list/nalist_XD_test.npy')
+        nalist = np.load('list/nalist_XD_test_R50NL.npy')
         self.total_T = int(nalist[-1,1])
 
 
         if test_mode:
             # XD test feature: shape = (145649, 1024)
-            self.con_all = np.memmap(args.xd_feat, dtype="float32", mode="r", shape=(self.total_T, 1024))
+            self.con_all = np.memmap(args.xd_feat, dtype="float32", mode="r", shape=(self.total_T, 10, 2048))
             print('[XD test] self.con_all shape:', self.con_all.shape)
 
-            assert self.con_all.ndim == 2, f"Expected 2D array, got {self.con_all.shape}"
-            assert self.con_all.shape[1] == 1024, f"Expected feature dim 1024, got {self.con_all.shape[1]}"
+            #assert self.con_all.ndim == 2, f"Expected 2D array, got {self.con_all.shape}"
+            #assert self.con_all.shape[1] == 1024, f"Expected feature dim 1024, got {self.con_all.shape[1]}"
 
         else:
             raise NotImplementedError("지금은 XD test_mode=True만.")
