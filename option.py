@@ -33,4 +33,37 @@ parser.add_argument('--pseudofile',type=str,  default='UCF_labels_org', help='gr
 parser.add_argument('--conall',type=str,  default='concat_UCF', help='ground truth file')
 
 
-parser.add_argument('--xd_feat', type=str, required=True, help='path to XD feature npy, shape=(145649,1024)')
+parser.add_argument('--xd_feat', type=str, help='path to XD feature npy, shape=(145649,1024)'
+)
+
+# 0323 추가 --------------------------------------
+
+# mode
+parser.add_argument('--train-mode', type=str, default='bce',
+                    choices=['bce', 'occ', 'hybrid', 'wbce'])
+parser.add_argument('--normal-source', type=str, default='pseudo',
+                    choices=['pseudo', 'prefix', 'intersect'])
+parser.add_argument('--pseudo-label-file', type=str, default='')
+parser.add_argument('--pseudo-weight-file', type=str, default='')
+# normal selection
+parser.add_argument('--normal-thr', type=float, default=0.3,
+                    help='pseudo score <= thr 를 normal 로 사용')
+parser.add_argument('--prefix-len', type=int, default=3)
+
+# occ loss
+parser.add_argument('--lambda-compact', type=float, default=1.0)
+parser.add_argument('--lambda-bce', type=float, default=0.0)
+
+# inference score
+parser.add_argument('--score-mode', type=str, default='distance',
+                    choices=['prob', 'distance', 'mix'])
+parser.add_argument('--mix-alpha', type=float, default=0.5)
+
+# paths
+parser.add_argument('--nalist-path', type=str, default='list/nalist_XD_test_R50NL.npy')
+parser.add_argument('--train-concat-path', type=str, default='../../C2FPL/concat_UCF.npy')
+parser.add_argument('--test-concat-path', type=str, default='Concat_XD_test_R50NL.npy')
+parser.add_argument('--center-path', type=str, default='unsupervised_ckpt/center.pt')
+
+parser.add_argument('--eval-every', type=int, default=0,
+                    help='0이면 epoch 끝에서만 평가, >0이면 매 N iteration마다 평가')

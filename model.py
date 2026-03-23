@@ -46,7 +46,7 @@ class Model_V2(nn.Module): # multiplication then Addition
         self.sigmoid = nn.Sigmoid()
         self.apply(weight_init)
 
-    def forward(self, inputs, return_logits=False): #변경 (추가) 부분: return_logits 받음
+    def forward(self, inputs, return_logits=False, return_feats=False): #변경 (추가) 부분: return_logits 받음
 
         #x = self.fc1(inputs)
         att1 = self.fc_att1(inputs)
@@ -58,8 +58,8 @@ class Model_V2(nn.Module): # multiplication then Addition
         att2 = self.fc_att2(x)
         x = self.fc2(x)
         x = (x * att2) + x
-        x = self.relu(x)
-        x = self.dropout(x)
+        feat = self.relu(x)     # <- 2번째 relu 통과 후 32차원 벡터를 compact loss 계산용 feature 로 추출
+        x = self.dropout(feat)
 
         #변경 (추가) 부분: sigmoid 통과 전 logits 도 반환
         logits = self.fc3(x)  # (N, 1) OR (N, 10, 1) depending on input
@@ -68,12 +68,19 @@ class Model_V2(nn.Module): # multiplication then Addition
         if prob.dim() > 2:
             prob_out = prob.mean(dim=1)  #10crop이면 평균내주기
             logits_out = logits.mean(dim=1)
+            feat_out = feat.mean(dim=1)
         else:
             prob_out = prob
             logits_out = logits
+            feat_out = feat
         
-        if return_logits:
-            return prob_out, logits_out
+        outputs = [prob_out]
 
-        return prob_out
- 
+        if return_logits and return_feats:
+            return prob_out, logits_out, feat_out
+        elif return_logits:
+            return prob_out, logits_out
+        elif return_feats:
+            return prob_out, feat_out
+        else:
+            return prob_out 

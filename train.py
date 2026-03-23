@@ -135,4 +135,129 @@ def concatenated_train_feedback(loader, model, optimizer, original_label, device
 
 
 
-   
+
+
+
+# ---------------------------------------------
+
+# 0323 추가 --------------------------------------
+
+def compact_loss(feat, center):
+    # feat: (N, D), center: (D,)
+    return ((feat - center.unsqueeze(0)) ** 2).sum(dim=1).mean()
+
+
+# 0323 추가 --------------------------------------
+
+@torch.no_grad()
+def compute_center(loader, model, normal_mask, device):
+    model.eval()
+    feat_sum = None
+    count = 0
+
+    for input, idx in loader:
+        keep = normal_mask[idx].bool()
+        if keep.sum() == 0:
+            continue
+
+        #print("batch keep:", keep.sum().item())
+
+        input = input.to(device)
+        _, feat = model(input, return_feats=True)
+        feat = feat[keep.to(device)]
+
+        if feat_sum is None:
+            feat_sum = feat.sum(dim=0)
+        else:
+            feat_sum += feat.sum(dim=0)
+
+        count += feat.size(0)
+
+    if count == 0:
+        raise RuntimeError("No normal samples selected for center computation.")
+
+    return feat_sum / count
+
+
+
+# 0323 추가 --------------------------------------
+
+def concatenated_train_occ(loader, model, optimizer, normal_mask, center,
+                           device, lambda_bce=0.0):
+    model.train()
+    losses = []
+
+    for input, idx in loader:
+        keep = normal_mask[idx].bool()
+        if keep.sum() == 0:
+            continue
+
+        input = input.to(device)
+        keep = keep.to(device)
+
+        prob, feat = model(input, return_feats=True)
+        prob = prob.float().flatten()[keep]
+        feat = feat[keep]
+
+        loss_comp = compact_loss(feat, center)
+        loss = loss_comp
+
+        if lambda_bce > 0:
+            target = torch.zeros_like(prob)   # normal only
+            loss_bce = F.binary_cross_entropy(prob, target)
+            loss = loss + lambda_bce * loss_bce
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        losses.append(loss.detach().cpu().item())
+
+    return float(np.mean(losses)) if losses else 0.0
+
+
+# 0323 추가 --------------------------------------
+
+def weighted_bce_train(loader, model, optimizer, pseudo_labels, pseudo_weights, device, eval_every=0, eval_callback=None):
+    """
+    pseudo_labels: torch.LongTensor (N,) with values in {-1, 0, 1}
+    pseudo_weights: torch.FloatTensor (N,) in [0,1]
+    """
+    model.train()
+    losses = []
+    eval_records=[]
+
+    for step_idx, (input, idx) in enumerate(loader, start=1):
+        input = input.to(device)
+
+        prob = model(input).float().flatten()  # shape (B,)
+
+        label = pseudo_labels[idx].to(device)
+        weight = pseudo_weights[idx].to(device)
+
+        valid = (label != -1)
+        if valid.sum() == 0:
+            continue
+
+        prob = prob[valid]
+        label = label[valid].float()
+        weight = weight[valid].float()
+
+        bce = F.binary_cross_entropy(prob, label, reduction='none')
+        loss = (bce * weight).mean()
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        losses.append(loss.detach().cpu().item())
+
+        # 중간 평가
+        if eval_every > 0 and eval_callback is not None and (step_idx % eval_every == 0):
+            model.eval()
+            auc, ap = eval_callback()
+            eval_records.append((step_idx, auc, ap))
+            model.train()
+
+
+    return float(np.mean(losses)) if losses else 0.0, eval_records

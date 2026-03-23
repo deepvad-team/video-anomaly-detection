@@ -1293,6 +1293,52 @@ def load_video_names(list_path):
 
     return names
 
+
+
+# 0323 추가 --------------------------------------
+
+# -------------------------
+# PLOCC 
+# -------------------------
+def test_occ(dataloader, model, args, device, center=None):
+    with torch.no_grad():
+        model.eval()
+        pred = []
+
+        for input in dataloader:
+            input = input.to(device)
+            prob, feat = model(input, return_feats=True)
+
+            if args.score_mode == 'prob':
+                score = prob.squeeze(-1)
+
+            else:
+                dist = ((feat - center.unsqueeze(0).to(device)) ** 2).sum(dim=1)
+
+                if args.score_mode == 'distance':
+                    score = dist
+                else:
+                    # mix
+                    d = (dist - dist.min()) / (dist.max() - dist.min() + 1e-8)
+                    p = prob.squeeze(-1)
+                    score = args.mix_alpha * p + (1 - args.mix_alpha) * d
+
+            pred.append(score.detach().cpu().numpy())
+
+        pred_seg = np.concatenate(pred, axis=0)
+        pred_frame = np.repeat(pred_seg, 16)
+        gt = np.load(args.gt)
+
+        fpr, tpr, threshold = roc_curve(list(gt), pred_frame)
+        rec_auc = auc(fpr, tpr)
+
+        precision, recall, th = precision_recall_curve(list(gt), pred_frame)
+        pr_auc = auc(recall, precision)
+
+        return rec_auc, pr_auc
+
+
+
 # ---------------------------------------------------------------------------------
 # Main test loop
 # ---------------------------------------------------------------------------------
@@ -1304,10 +1350,10 @@ if __name__ == '__main__':
     # 1. GT / dataset
     gt = np.load(args.gt)
         #변경 (추가) 부분: (145649, 1024) 데이터 그대로 일단 받아오기
-    xd_dataset = Dataset_Con_all_feedback_XD(args, test_mode=True)
-    #ucf_dataset = Dataset_Con_all_feedback_UCF(args, test_mode=True)
-    X_flat = xd_dataset.con_all
-    nalist = np.load("list/nalist_XD_test_R50NL.npy")
+    #xd_dataset = Dataset_Con_all_feedback_XD(args, test_mode=True)
+    ucf_dataset = Dataset_Con_all_feedback_UCF(args, test_mode=True)
+    X_flat = ucf_dataset.con_all
+    nalist = np.load(args.nalist_path)
     print("X_flat shape:", X_flat.shape)
     print("nalist shape:", nalist.shape)
 
@@ -1328,7 +1374,7 @@ if __name__ == '__main__':
     #변경(추가) 부분. 1024 차원으로 들어오는 TEST 데이터 -> 2048 
     #adapter = CopyPlusExtraAdapter(d=1024, use_ln=True).to(device)
     adapter = ResidualAdapter2048(d = 2048, use_ln = True).to(device)
-    #torch.save(adapter.state_dict(), "adapter_init.pt") #baseline adapter 고정(저장) - 초기 1번만
+    torch.save(adapter.state_dict(), "adapter_init.pt") #baseline adapter 고정(저장) - 초기 1번만
     adapter.load_state_dict(torch.load("adapter_init.pt",  map_location=device))
     adapter.eval()
 
@@ -1336,27 +1382,16 @@ if __name__ == '__main__':
     model = Model_V2(args.feature_size).to(device)
     #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../C2FPL/ckpt/UCFfinal(git).pkl').items()})
     #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('unsupervised_ckpt/UCF_final_20260218_165841_tgkaplua.pkl').items()})  #train from scratch and evaluate
-    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_final_20260311_191256_sfs4jnk1.pkl').items()})
+    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_best_20260311_191256_sfs4jnk1.pkl').items()})
+    
+    #ckpt = torch.load('unsupervised_ckpt/UCF_best_20260323_123936_spychkjs.pkl', map_location=device)
+    #state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
+    #model.load_state_dict({k.replace('module.', ''): v for k, v in state_dict.items()})
+
     model.eval()
     
 
-    '''
-    #Ereal과 Efake가 값이 나오기는 하는지 1차 확인.
-    res0 = inspect_video_energy_terms(
-        X_flat=X_flat,
-        nalist=nalist,
-        vid_idx=0,
-        adapter=adapter,
-        model=model,
-        device=device,
-        q=0.2,
-        min_keep=8,
-        sgld_steps=10,
-        sgld_lr=0.05,
-        sgld_noise=0.01,
-    )    print(res0)
-    '''
-    '''
+    
     #4. baseline (adapter로 차원만, TEA 없음)
     res_base = eval_xd_with_episodic_tea(
         X_flat=X_flat,
@@ -1373,7 +1408,7 @@ if __name__ == '__main__':
     print("\n[BASELINE]")
     print("AUC:", res_base["auc"])
     print("AP :", res_base["ap"])
-    '''
+    
 
 
     '''
@@ -1443,7 +1478,7 @@ if __name__ == '__main__':
 
         adapt_prefix_only=False,          # baseline -> 적응 안 함
         exclude_prefix_from_eval=True,    # suffix만 평가
-        warmup_segments=5,
+        warmup_segments=3,
     )
 
     print("\n[BASELINE - SUFFIX ONLY]")
@@ -1467,12 +1502,12 @@ if __name__ == '__main__':
     min_keep=8,
     #min_run은 여기선 의미 없음!
     tea_lr=1e-3,
-    tea_steps_per_video=10,
+    tea_steps_per_video=20,
     selection_mode="score",
 
     adapt_prefix_only=True,           # prefix 안에서만 selection/update
     exclude_prefix_from_eval=True,    # suffix만 평가
-    warmup_segments=5,                # adaptation pool 지정 (prefix)
+    warmup_segments=3,                # adaptation pool 지정 (prefix)
     )
 
     print("\n[PREFIX WARM-UP TEA]")
@@ -1480,10 +1515,10 @@ if __name__ == '__main__':
     print("AP :", res_tea_warm["ap"])
     
     # 비디오 이름이 있으면 같이 넣기
-    video_names = load_video_names("list/XD_rgb_test_R50NL.list")   # 아까 만든 함수 그대로 사용
+    video_names = load_video_names("list/ucf-i3d_test_fixed_local.list")   # 아까 만든 함수 그대로 사용
     total_T = int(nalist[-1, 1])
     gt_seg = frame_gt_to_segment_gt(gt, total_T, frame_repeat=16)
-
+   
     rows, video_debug = analyze_prefix_selection_score(
         X_flat=X_flat,
         nalist=nalist,
@@ -1491,19 +1526,20 @@ if __name__ == '__main__':
         adapter=adapter,
         model=model,
         device=device,
-        warmup_segments=5,
-        q=0.1,
+        warmup_segments=3,
+        q=1.0,
         frame_repeat=16,
         video_names=video_names,
-        save_csv_path="prefix_selection_analysis_q03.csv",
+        save_csv_path="prefix_selection_analysis_q05.csv",
     )
 
     plot_prefix_selection_examples(
         video_debug,
-        save_dir="prefix_selection_plots_q03",
-        top_k=15,
+        save_dir="prefix_selection_plots_q05",
+        top_k=10,
         mode="worst",
     )
+    
     '''
     num_eval_seg = int(res_tea_warm["eval_mask_seg"].sum())
     num_total_seg = int(len(res_tea_warm["eval_mask_seg"]))
