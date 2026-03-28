@@ -10,7 +10,7 @@ import option
 from tqdm import tqdm
 import time
 import os
-from model import Model, Model_V2
+from model import Model, Model_V2, Model_V2_AllCNN
 from adapter import CopyPlusExtraAdapter, ResidualAdapter2048
 # from datasets.dataset import 
 import copy
@@ -119,7 +119,7 @@ def test_2(dataloader, model, adapter, args, device):
 def run_one_video(X_flat, nalist, vid_idx, adapter, model, device):
     s, e = nalist[vid_idx]
     x_video = X_flat[s:e]   # (T_i, 1024)
-
+    
     x_video = torch.from_numpy(x_video).float().to(device)
 
     with torch.no_grad():
@@ -142,7 +142,10 @@ def get_video_scores_and_mask(X_flat, nalist, vid_idx, adapter, model, device, q
     """
     s, e = nalist[vid_idx]
     x_video = X_flat[s:e]   # (T_i, 1024)
+    x_video = _normalize_video_feature_shape(x_video)
     x_video = torch.from_numpy(x_video).float().to(device)
+
+    x_video = x_video.unsqueeze(0)  # (1, T, 2024)
 
     model.eval()
     adapter.eval()
@@ -151,8 +154,10 @@ def get_video_scores_and_mask(X_flat, nalist, vid_idx, adapter, model, device, q
         x_2048 = adapter(x_video)                       # (T_i,2048)
         prob, logit = model(x_2048, return_logits=True)  # (T_i,1), (T_i,1)
 
-    prob_1d = prob.squeeze(-1)     # (T_i,)
-    logit_1d = logit.squeeze(-1)   # (T_i,)
+    #prob_1d = prob.squeeze(-1)     # (T_i,)
+    #logit_1d = logit.squeeze(-1)   # (T_i,)
+    prob_1d = prob[0, :, 0]
+    logit_1d = logit[0, :, 0]
 
     thresh = torch.quantile(prob_1d, q)
     mask = prob_1d <= thresh       # normal 후보: anomaly score 낮은 것들
@@ -194,6 +199,7 @@ def inspect_video_energy_terms(
 
     s, e = nalist[vid_idx]
     x_video = X_flat[s:e]  # (T_i, 1024)
+    x_video = _normalize_video_feature_shape(x_video)
     x_video = torch.from_numpy(x_video).float().to(device)
 
     model.eval()
@@ -659,12 +665,31 @@ def _tea_update_one_video(
 
             # 이제부터 selection은 x_video 전체가 아니라 x_adapt에서만 하게 됨. 물론 adapt_prefix_only=False여서
             # x_adapt가 전체 비디오 x_video 로 들어올 수는 있음. 즉 조절 가능!
-            x_2048 = adapter_episode(x_adapt)    
+            x_adapt_in = x_adapt.unsqueeze(0)   #(1, T, 1024)
 
-            prob, logit = model(x_2048, return_logits=True)     # x_adapt에 대한 prob, logit 얻어옴.
+            x_2048 = adapter_episode(x_adapt_in)    #(1, T, 2048)
 
-        prob = prob.squeeze(-1)    # (T_i,)
-        logit = logit.squeeze(-1)  # (T_i,)
+            prob, logit = model(x_2048, return_logits=True)     # x_adapt에 대한 prob, logit 얻어옴. (1, T, 1)
+
+        #prob = prob.squeeze(-1)    # (T_i,)
+        #logit = logit.squeeze(-1)  # (T_i,)
+        prob = prob[0, :, 0]
+        logit = logit[0, :, 0]
+
+        thresh = torch.quantile(prob.detach(), q)
+        mask = prob <= thresh
+        num_selected = int(mask.sum().item())
+        if num_selected < min_keep:
+            topk_idx = torch.argsort(prob.detach())[:min_keep]
+            mask = torch.zeros_like(prob, dtype=torch.bool)
+            mask[topk_idx] = True
+            num_selected = int(mask.sum().item())
+
+        logit_sel = logit[mask]
+        prob_sel = prob[mask]
+
+        E_real = F.softplus(logit_sel).mean()
+        loss = E_real
 
 
         # local prototype을 normal 후보를 뽑는 데에 도움을 받자 실험용 
@@ -883,6 +908,7 @@ def eval_xd_with_episodic_tea(
     for vid_idx in range(len(nalist)):
         s, e = nalist[vid_idx]
         x_video_np = X_flat[s:e]                            # (T_i,1024)
+        x_video_np = _normalize_video_feature_shape(x_video_np)
         x_video = torch.from_numpy(x_video_np).float().to(device)
 
         # 비디오마다 adapter 리셋
@@ -916,10 +942,14 @@ def eval_xd_with_episodic_tea(
         # 2) adaptation 후 최종 inference
         adapter_episode.eval()
         with torch.no_grad():
-            x_2048 = adapter_episode(x_video)
+            x_video_in = x_video.unsqueeze(0)                 # (1,T,1024)
+            x_2048 = adapter_episode(x_video_in)              # (1,T,2048)
+            #x_2048 = adapter_episode(x_video)
             prob, _ = model(x_2048, return_logits=True)
 
-        prob = prob.squeeze(-1).detach().cpu().numpy()     # (T_i,)
+        #prob = prob.squeeze(-1).detach().cpu().numpy()     # (T_i,)
+        prob = prob[0, :, 0].detach().cpu().numpy()
+
         seg_scores_all[s:e] = prob
 
         if debug is not None:
@@ -1129,14 +1159,20 @@ def analyze_prefix_selection_score(
             continue
 
         x_prefix_np = np.asarray(X_flat[s:s+prefix_len])   # (prefix_len, 1024)
-        x_prefix = torch.from_numpy(x_prefix_np).float().to(device)
+        #x_prefix = torch.from_numpy(x_prefix_np).float().to(device)
+        x_prefix = torch.from_numpy(x_prefix_np).float().to(device).unsqueeze(0)  # (1,T,1024)
 
         with torch.no_grad():
             x_2048 = adapter(x_prefix)
             prob, logit = model(x_2048, return_logits=True)
+        
+        
+        #prob = prob.squeeze(-1).detach().cpu().numpy()    # (prefix_len,)
+        #logit = logit.squeeze(-1).detach().cpu().numpy()
+        prob = prob[0, :, 0].detach().cpu().numpy()
+        logit = logit[0, :, 0].detach().cpu().numpy()
 
-        prob = prob.squeeze(-1).detach().cpu().numpy()    # (prefix_len,)
-        logit = logit.squeeze(-1).detach().cpu().numpy()
+    
 
         thresh = np.quantile(prob, q)
         mask = prob <= thresh
@@ -1293,7 +1329,40 @@ def load_video_names(list_path):
 
     return names
 
+def _normalize_video_feature_shape(x_video_np):
+    """
+    입력 feature를 최종적으로 (T, D)로 맞춘다.
+    
+    가능한 입력 예:
+      (T, D)
+      (T, C, D)         # 예: 10-crop
+      (T, 1, C, D)      # extra singleton axis 포함
+      (T, C, H, D) 같은 이상한 경우는 에러로 확인
+    """
+    x = np.asarray(x_video_np)
 
+    # case 1: 이미 (T, D)
+    if x.ndim == 2:
+        return x
+
+    # case 2: (T, C, D)  -> crop 평균
+    if x.ndim == 3:
+        return x.mean(axis=1)
+
+    # case 3: (T, 1, C, D) or (T, C, 1, D)
+    if x.ndim == 4:
+        # singleton 축 제거
+        x = np.squeeze(x)
+
+        # squeeze 후 다시 처리
+        if x.ndim == 2:
+            return x
+        elif x.ndim == 3:
+            return x.mean(axis=1)
+        else:
+            raise ValueError(f"Unexpected 4D->squeezed shape: {x.shape}")
+
+    raise ValueError(f"Unsupported feature shape: {x.shape}")
 
 # 0323 추가 --------------------------------------
 
@@ -1374,15 +1443,16 @@ if __name__ == '__main__':
     #변경(추가) 부분. 1024 차원으로 들어오는 TEST 데이터 -> 2048 
     #adapter = CopyPlusExtraAdapter(d=1024, use_ln=True).to(device)
     adapter = ResidualAdapter2048(d = 2048, use_ln = True).to(device)
-    torch.save(adapter.state_dict(), "adapter_init.pt") #baseline adapter 고정(저장) - 초기 1번만
+    #torch.save(adapter.state_dict(), "adapter_init.pt") #baseline adapter 고정(저장) - 초기 1번만
     adapter.load_state_dict(torch.load("adapter_init.pt",  map_location=device))
     adapter.eval()
 
     # 3. model
-    model = Model_V2(args.feature_size).to(device)
+    #model = Model_V2(args.feature_size).to(device)
+    model = Model_V2_AllCNN(args.feature_size).to(device)
     #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../C2FPL/ckpt/UCFfinal(git).pkl').items()})
     #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('unsupervised_ckpt/UCF_final_20260218_165841_tgkaplua.pkl').items()})  #train from scratch and evaluate
-    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_best_20260311_191256_sfs4jnk1.pkl').items()})
+    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_all_cnn_best_20260328_131600_rge7fhu1.pkl').items()})
     
     #ckpt = torch.load('unsupervised_ckpt/UCF_best_20260323_123936_spychkjs.pkl', map_location=device)
     #state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
@@ -1478,7 +1548,7 @@ if __name__ == '__main__':
 
         adapt_prefix_only=False,          # baseline -> 적응 안 함
         exclude_prefix_from_eval=True,    # suffix만 평가
-        warmup_segments=3,
+        warmup_segments=5,
     )
 
     print("\n[BASELINE - SUFFIX ONLY]")
@@ -1501,24 +1571,23 @@ if __name__ == '__main__':
     q=1.0,   
     min_keep=8,
     #min_run은 여기선 의미 없음!
-    tea_lr=1e-3,
-    tea_steps_per_video=20,
+    tea_lr=1e-2,
+    tea_steps_per_video=30,
     selection_mode="score",
 
     adapt_prefix_only=True,           # prefix 안에서만 selection/update
     exclude_prefix_from_eval=True,    # suffix만 평가
-    warmup_segments=3,                # adaptation pool 지정 (prefix)
+    warmup_segments=5,                # adaptation pool 지정 (prefix)
     )
 
     print("\n[PREFIX WARM-UP TEA]")
     print("AUC:", res_tea_warm["auc"])
     print("AP :", res_tea_warm["ap"])
-    
+    '''
     # 비디오 이름이 있으면 같이 넣기
     video_names = load_video_names("list/ucf-i3d_test_fixed_local.list")   # 아까 만든 함수 그대로 사용
     total_T = int(nalist[-1, 1])
     gt_seg = frame_gt_to_segment_gt(gt, total_T, frame_repeat=16)
-   
     rows, video_debug = analyze_prefix_selection_score(
         X_flat=X_flat,
         nalist=nalist,
@@ -1526,20 +1595,20 @@ if __name__ == '__main__':
         adapter=adapter,
         model=model,
         device=device,
-        warmup_segments=3,
-        q=1.0,
+        warmup_segments=20,
+        q=0.1,
         frame_repeat=16,
         video_names=video_names,
-        save_csv_path="prefix_selection_analysis_q05.csv",
+        save_csv_path="prefix_selection_analysis_q07.csv",
     )
 
     plot_prefix_selection_examples(
         video_debug,
-        save_dir="prefix_selection_plots_q05",
+        save_dir="prefix_selection_plots_q06",
         top_k=10,
         mode="worst",
     )
-    
+    '''
     '''
     num_eval_seg = int(res_tea_warm["eval_mask_seg"].sum())
     num_total_seg = int(len(res_tea_warm["eval_mask_seg"]))

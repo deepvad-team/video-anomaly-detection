@@ -218,19 +218,57 @@ def make_hard_label_and_weight(
 
 
 
+def get_length_aware_window_and_sigma(
+    T: int,
+    rel_window_ratio: float = 0.03,     # 가변 T 고려하여 비디오 길이의 3%를 local window로 보는 것으로 변경
+    min_window: int = 20,   # 너무 짧은 비디오에 대해 최소 20 보장
+    max_window: int = 128,  # 너무 긴 비디오에서 계산량 폭증 막음
+    sigma_ratio: float = 0.35,  # window 커지면 temporal Gaussain 폭도 같이 키워줌
+    min_sigma: float = 5.0,
+):
+    """
+    T: video length
+
+    return:
+      window: int
+      sigma_t: float
+    """
+    window = int(round(T * rel_window_ratio))
+    window = max(min_window, window)
+    window = min(max_window, window)
+
+    sigma_t = max(min_sigma, sigma_ratio * window)
+    return window, sigma_t
+
 
 def build_local_affinity_sparse(
     video_feat: np.ndarray,
-    sigma_t: float = 5.0,
-    window: int = 20,
+    rel_window_ratio: float = 0.03,
+    min_window: int = 20,
+    max_window: int = 128,
+    sigma_ratio: float = 0.35,
+    min_sigma: float = 5.0,
+    #sigma_t: float = 5.0,
+    #window: int = 20,
     topk: int = 10,
 ) -> sp.csr_matrix:
+    
     """
     video_feat: (T, D)
     return: sparse normalized affinity S, shape (T, T)
     """
 
     T, D = video_feat.shape
+
+    # (가변길이 고려) length-aware window and sigma
+    window, sigma_t = get_length_aware_window_and_sigma(
+        T=T,
+        rel_window_ratio=rel_window_ratio,
+        min_window=min_window,
+        max_window=max_window,
+        sigma_ratio=sigma_ratio,
+        min_sigma=min_sigma,
+    )
 
     # cosine similarity용 L2 normalize
     feat = video_feat.astype(np.float32)
@@ -340,10 +378,18 @@ def select_highconf_normal_videos(video_scores_list, all_video_feats, ratio=0.15
     return normal_video_indices, normal_list
 
 
+
+
+
+
+
+
+
 def generate_propagation_pseudo_labels(
     train_data,
     nalist,
-    prefix_len: int = 5,
+    prefix_len: int = 3
+    ,
     feature_norm: str = "standard",
     sigma_t: float = 5.0,
     alpha: float = 0.9,
@@ -370,8 +416,11 @@ def generate_propagation_pseudo_labels(
 
         S = build_local_affinity_sparse(
             video_feat=video_feat,
-            sigma_t=sigma_t,
-            window=20,
+            rel_window_ratio=0.03,
+            min_window=20,
+            max_window=128,
+            sigma_ratio=0.35,
+            min_sigma=5.0,
             topk=10
         )
 
@@ -404,8 +453,22 @@ def generate_propagation_pseudo_labels(
 
     for video_feat, z in tqdm(list(zip(all_video_feats, video_scores_list)), desc="Pass 2: label+weight"):
         T = len(video_feat)
+
+        # 긴 비디오에서는 window 어떻게 잡히는 지 로그 남기기
+        if T > 5000:
+            window_dbg, sigma_dbg = get_length_aware_window_and_sigma(
+                T=T,
+                rel_window_ratio=0.03,
+                min_window=20,
+                max_window=128,
+                sigma_ratio=0.35,
+                min_sigma=5.0,
+            )
+            print(f"[LONG VIDEO] T={T}, window={window_dbg}, sigma_t={sigma_dbg:.2f}")
+        
         k = min(prefix_len, T)
         seed_idx = np.arange(k)
+
 
         d = compute_global_abnormal_score(video_feat, normal_list)
 
@@ -478,7 +541,7 @@ def main():
     scores_flat, labels_flat, weights_flat, normal_video_indices = generate_propagation_pseudo_labels(
         train_data=train_data,
         nalist=nalist,
-        prefix_len=5,
+        prefix_len=2,
         feature_norm="standard",
         sigma_t=5.0,
         alpha=0.9,
@@ -487,10 +550,22 @@ def main():
         abnormal_q=0.05,
     )
 
-    np.save("pseudo_prop5_scorez_glist.npy", scores_flat)
-    np.save("pseudo_prop5_label_glist.npy", labels_flat)
-    np.save("pseudo_prop5_weight_glist.npy", weights_flat)
-    np.save("pseudo_prop5_highconf_video_idx.npy", normal_video_indices)
+    np.save("pseudo_prop2_scorez_glist_rw.npy", scores_flat)
+    np.save("pseudo_prop2_label_glist_rw.npy", labels_flat)
+    np.save("pseudo_prop2_weight_glist_rw.npy", weights_flat)
+    np.save("pseudo_prop2_highconf_video_idx_rw.npy", normal_video_indices)
+    
+    ''' 변화 확인용
+
+    old_label = np.load("pseudo_prop3_label_glist.npy")
+    new_label = np.load("pseudo_prop3_label_glist_rw.npy")
+
+    print("same ratio:", (old_label == new_label).mean())
+    print("changed count:", (old_label != new_label).sum())
+
+    for v in [-1, 0, 1]:
+        print(f"value {v} count old/new:", (old_label == v).sum(), (new_label == v).sum())
+    '''
     '''
     np.savez(
         "pseudo_prop5_meta_glist.npz",
@@ -512,5 +587,7 @@ def main():
     print("  pseudo_prop5_meta.npz")
 
     '''
+
+
 if __name__ == "__main__":
     main()

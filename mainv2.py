@@ -4,7 +4,7 @@ import torch
 from utillsv2 import Concat_list_all_crop_feedback
 from model import Model, Model_V2
 from dataset import  Dataset_Con_all_feedback_UCF
-from train import concatenated_train, concatenated_train_feedback, compute_center, concatenated_train_occ, weighted_bce_train
+from train import concatenated_train_feedback, compute_center, concatenated_train_occ, weighted_bce_train
 from test import test, test_occ
 import option
 from tqdm import tqdm
@@ -13,6 +13,7 @@ import numpy as np
 import wandb
 import copy
 #torch.set_default_tensor_type('torch.cuda.FloatTensor')
+
 
 #변경(추가) -- 시드 함수
 import random
@@ -29,15 +30,14 @@ def set_seed(seed=42):
 if __name__ == '__main__':
     print('mainv2')
     args = option.parser.parse_args()
-    #변경(추가) -- seed 고정
     set_seed(42)
 
     len_N, original_labels  = Concat_list_all_crop_feedback(Test=False, create='False')
 
 
     # 0323 추가 --------------------------------------
-
-    # OCC 용-----------------------------
+   
+    # OCC 용 (pseudo 정상 mask 만들기) -----------------------------
     #pseudo = np.load(args.pseudofile).astype(np.float32) -> soft label 인 경우
     pseudo = np.load(args.pseudofile).astype(np.int64)
     if args.normal_source == 'pseudo':
@@ -52,8 +52,7 @@ if __name__ == '__main__':
 
     wandb.login()
     wandb.init(project="Unsupervised Anomaly Detection", config=args)
-
-    # 변경(추가) -- run name 설정
+    # run name 설정
     from datetime import datetime
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_id = wandb.run.id
@@ -65,15 +64,20 @@ if __name__ == '__main__':
     os.makedirs("unsupervised_ckpt", exist_ok=True)
     best_path  = f'unsupervised_ckpt/{args.datasetname}_best_{ts}_{run_id}.pkl'
     final_path = f'unsupervised_ckpt/{args.datasetname}_final_{ts}_{run_id}.pkl'
+    wandb.define_metric("epoch")
+    wandb.define_metric("AUC", step_metric="epoch")
+    wandb.define_metric("AP", step_metric="epoch")
+    wandb.define_metric("epoch_loss", step_metric="epoch")
 
 
 
 
+    
     train_dataset = Dataset_Con_all_feedback_UCF(args, test_mode=False, is_normal=True)
     
     
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, 
-                              shuffle=True, num_workers=args.workers, pin_memory=False)     
+                              shuffle=True, num_workers=args.workers, pin_memory=False, drop_last=False)     
 
     # 0323 추가 --------------------------------------
     # 중심점은 shuffle = False -> 전체 normal을 훑음.               
@@ -93,18 +97,15 @@ if __name__ == '__main__':
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Number of parameters: {total_params}") 
+
     if not os.path.exists('./ckpt'):
         os.makedirs('./ckpt')    
 
-
-    optimizer = optim.SGD(model.parameters(), lr=0.005, weight_decay=5e-4, momentum=0.9, nesterov=True)
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, weight_decay=5e-4, momentum=0.9, nesterov=True)
     #optimizer = optim.RMSprop(model.parameters(), lr=0.0001, weight_decay=5e-4, momentum=0.6)
-
     scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[15, 25], gamma=0.1)
+    
     test_info = {"epoch": [], "test_auc": []}
-
-
-
 
     # ---------------- epoch 0 eval ----------------
     center = None
@@ -112,7 +113,6 @@ if __name__ == '__main__':
         auc, ap = test(test_loader, model, args, device)
 
     # 0323 추가 (wbce mode) --------------------------------------
-
     elif args.train_mode == 'wbce':
         pseudo_labels = torch.from_numpy(np.load(args.pseudo_label_file)).long()
         pseudo_weights = torch.from_numpy(np.load(args.pseudo_weight_file)).float()
@@ -120,18 +120,17 @@ if __name__ == '__main__':
         if args.eval_every > 0:
             eval_every = args.eval_every
         else:
-            eval_every = max(1, len(train_loader) // 2)   # 1/2 epoch마다 평가
+            eval_every = max(1, len(train_loader) // 1)   # 1/2 epoch마다 평가
         print("eval_every:", eval_every)
-
         print("loaded pseudo label:", args.pseudo_label_file)
         print("loaded pseudo weight:", args.pseudo_weight_file)
         print("normal count:", int((pseudo_labels == 0).sum().item()))
         print("abnormal count:", int((pseudo_labels == 1).sum().item()))
         print("ignore count:", int((pseudo_labels == -1).sum().item()))
+
         auc, ap = test(test_loader, model, args, device)
 
     # 0323 추가 (occ mode) --------------------------------------
-
     else:
         center = compute_center(center_loader, model, normal_mask, device)
         print("center fixed for all epochs")
@@ -139,10 +138,10 @@ if __name__ == '__main__':
         auc, ap = test_occ(test_loader, model, args, device, center)
 
 
+
     # 0 epoch 기록
     print("epoch 0 auc =", auc)
-    wandb.log({'AUC': auc, 'AP': ap}, step=0)
-
+    wandb.log({"epoch": 0, "AUC": auc, "AP": ap})
     best_auc = auc
     save_obj = {"model": model.state_dict()}
     if args.train_mode not in ["bce", "wbce"]:
@@ -153,13 +152,12 @@ if __name__ == '__main__':
 
     # ---------------- training ----------------
     for epoch in tqdm(range(1, args.max_epoch + 1), total=args.max_epoch, dynamic_ncols=True):
+        
         if args.train_mode == 'bce':
-            loss, lls = concatenated_train_feedback(train_loader, model, optimizer,original_labels, device )
+            loss, lls = concatenated_train_feedback(train_loader, model, optimizer, original_labels, device )
             auc, ap = test(test_loader, model, args, device)
 
-
         # 0323 추가 --------------------------------------
-
         elif args.train_mode == 'wbce':
             loss, eval_records = weighted_bce_train(
             train_loader,
@@ -169,13 +167,15 @@ if __name__ == '__main__':
             pseudo_weights,
             device,
             eval_every,
-            eval_callback=lambda: test(test_loader, model, args, device)
+            eval_callback=None
             )
+            '''
                 # 혹시 중간평가가 하나도 없으면 epoch 끝 평가 1번
             if len(eval_records) == 0:
                 auc, ap = test(test_loader, model, args, device)
                 eval_records = [(len(train_loader), auc, ap)]
 
+            
             # 중간 평가 결과들 중 best 체크
             for inner_step, auc_i, ap_i in eval_records:
                 print(f"[eval] epoch={epoch}, step={inner_step}, auc={auc_i:.4f}, ap={ap_i:.4f}")
@@ -189,15 +189,14 @@ if __name__ == '__main__':
                 wandb.log(
                     {'AUC': auc_i, 'AP': ap_i, 'loss': loss},
                     step=(epoch - 1) * len(train_loader) + inner_step
-                )
+                )'''
 
             # 마지막 기록을 epoch 대표값으로 사용
-            auc, ap = eval_records[-1][1], eval_records[-1][2]
-            #auc, ap = test(test_loader, model, args, device)
+            #auc, ap = eval_records[-1][1], eval_records[-1][2]
+            auc, ap = test(test_loader, model, args, device)
 
         # 0323 추가 --------------------------------------
-        # args.train_mode == 'occ'
-
+        # train_mode occ
         else:
             # center 매 epoch 마다 계산
             #print("computing center...")
@@ -231,9 +230,15 @@ if __name__ == '__main__':
 
         print('\nEpoch {}/{}, LR: {:.4f} auc: {:.4f}, ap: {:.4f}, loss: {:.4f}\n'.format(epoch, args.max_epoch, optimizer.param_groups[0]['lr'] , auc, ap, loss))
         #wandb.log({'AUC': auc,'AP': ap, 'loss': loss}, step=(epoch+1)*544)
-        wandb.log({'AUC': auc,'AP': ap, 'epoch_loss': loss}, step=epoch_end_step)
+       
+        # each epoch
+        wandb.log({
+            "epoch": epoch,
+            "AUC": auc,
+            "AP": ap,
+            "epoch_loss": loss
+        })
 
-#wandb.run.name = args.datasetname
 
 # ---------------- final save ----------------
 save_obj = {"model": model.state_dict()}

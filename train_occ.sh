@@ -1,5 +1,3 @@
-# 0323 추가 --------------------------------------
-
 python mainv2.py \
   --train-mode wbce \
   --optimizer SGD \
@@ -9,11 +7,11 @@ python mainv2.py \
   --feature-size 2048 \
   --gt list/gt-ucf-RTFM.npy \
   --datasetname UCF \
-  --pseudofile pseudo_prop5_label_glist.npy \
-  --pseudo-label-file pseudo_prop5_label_glist.npy \
-  --pseudo-weight-file pseudo_prop5_weight_glist.npy\
+  --pseudofile pseudo_prop2_label_glist_rw.npy \
+  --pseudo-label-file pseudo_prop2_label_glist_rw.npy \
+  --pseudo-weight-file pseudo_prop2_weight_glist_rw.npy\
   --normal-source pseudo \
   --normal-thr 0.3 \
   --lambda-compact 1.0 \
   --lambda-bce 0.0
-  --eval-every 0
+  #--eval-every 0

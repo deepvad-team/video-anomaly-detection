@@ -84,3 +84,82 @@ class Model_V2(nn.Module): # multiplication then Addition
             return prob_out, feat_out
         else:
             return prob_out 
+
+
+class Model_V2_AllCNN(nn.Module):
+    
+    def __init__(self, n_features, kernel_size=5):
+        super().__init__()
+        
+        # ===== NO FC layers! All Conv1d! ⭐⭐⭐ =====
+        
+        # Layer 1: 2048 → 512 (WITH temporal!)
+        self.conv1 = nn.Conv1d(n_features, 256, kernel_size, padding=kernel_size//2)
+        self.bn1 = nn.BatchNorm1d(256)
+        
+        # Attention (also temporal!)
+        self.conv_att1 = nn.Conv1d(n_features, 256, kernel_size, padding=kernel_size//2)
+        
+        # Layer 2: 512 → 128 (WITH temporal!)
+        self.conv2 = nn.Conv1d(256, 64, kernel_size, padding=kernel_size//2)
+        self.bn2 = nn.BatchNorm1d(64)
+        
+        # Attention (also temporal!)
+        self.conv_att2 = nn.Conv1d(256, 64, kernel_size, padding=kernel_size//2)
+        
+        # Layer 3: 128 → 32 (WITH temporal!)
+        #self.conv3 = nn.Conv1d(128, 32, kernel_size, padding=kernel_size//2)
+        #self.bn3 = nn.BatchNorm1d(32)
+        
+        # Output: Only 1 FC at the end
+        self.fc_out = nn.Linear(64, 1)
+        
+        self.dropout1 = nn.Dropout(0.4)
+        self.dropout2 = nn.Dropout(0.6)
+        self.gelu = nn.GELU()
+        self.sigmoid = nn.Sigmoid()
+    
+
+    def forward(self, inputs, return_logits=False):
+        orig_shape = inputs.shape
+
+        if inputs.dim() == 3:
+            B, T, D = inputs.shape
+            use_temporal = True
+        else:
+            B = inputs.shape[0]
+            T = 1
+            inputs = inputs.unsqueeze(1)
+            use_temporal = False
+
+        x = inputs.permute(0, 2, 1)
+
+        att1 = torch.sigmoid(self.conv_att1(x))
+        x = self.conv1(x)
+        x = x * att1 + att1
+        x = self.gelu(x)
+        x = self.dropout1(x)
+
+        att2 = torch.sigmoid(self.conv_att2(x))
+        x = self.conv2(x)
+        x = x * att2 + att2
+        x = self.gelu(x)
+        x = self.dropout2(x)
+
+        x = x.permute(0, 2, 1)
+
+        if use_temporal and T > 1:
+            x = x.reshape(B * T, 64)
+        else:
+            x = x.squeeze(1)
+
+        logits = self.fc_out(x)
+        prob = torch.sigmoid(logits)
+
+        if len(orig_shape) == 3:
+            logits = logits.reshape(B, T, 1)
+            prob = prob.reshape(B, T, 1)
+
+        if return_logits:
+            return prob, logits
+        return prob
