@@ -9,7 +9,8 @@ python test.py \
     --gt list/gt-ucf-RTFM.npy\
     --datasetname UCF \
     --pseudofile ../../C2FPL/Unsup_labels/UCF_unsup_labels_original_New_V88_1.5.npy\
-    --conall concat_UCF\
     --nalist-path list/nalist_test_i3d.npy
-    #--xd_feat concat_XD_test.npy\
+    #--conall concat_XD_test.npy\
     #--nalist-path list/nalist_XD_test.npy
+    #--xd_feat concat_XD_test.npy\
+

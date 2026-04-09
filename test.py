@@ -260,7 +260,7 @@ def inspect_video_energy_terms(
         grad = torch.autograd.grad(E_tilde_now, x_tilde, create_graph=False)[0]
 
         with torch.no_grad():
-            x_tilde = x_tilde - (sgld_lr / 2.0) * grad + sgld_noise * torch.randn_like(x_tilde)
+            x_tilde = x_tilde + (sgld_lr / 2.0) * grad + sgld_noise * torch.randn_like(x_tilde)
 
         x_tilde = x_tilde.detach()
 
@@ -637,6 +637,25 @@ def _tea_update_one_video(
     )
 
     debug = []
+    with torch.no_grad():
+        if adapt_prefix_only:
+            x_adapt, prefix_len = _split_prefix_suffix_video(
+                x_video, warmup_segments=warmup_segments
+            )
+        else:
+            x_adapt = x_video
+            prefix_len = x_video.shape[0]
+
+        x_ref_in = x_adapt.unsqueeze(0)                          # (1, T, 1024)
+        x_ref_2048 = adapter_episode(x_ref_in)                   # (1, T, 2048)
+        _, logit_ref = model(x_ref_2048, return_logits=True)     # (1, T, 1)
+        E_ref_init = F.softplus(logit_ref[0, :, 0]).mean().item() # scalar, no grad
+
+    # THEN in the loss block (Bug 2 location), add an energy floor penalty:
+    #E_floor = 0.5 * E_ref_init   # don't let E_real drop below 50% of the initial value
+    #floor_penalty = F.relu(E_floor - E_real)   # nonzero only if E_real has collapsed too far
+
+    #loss = (E_real - E_fake) + lambda_anchor * anchor 
 
     for step_idx in range(tea_steps_per_video):
         # ---------------------------
@@ -678,6 +697,7 @@ def _tea_update_one_video(
 
         thresh = torch.quantile(prob.detach(), q)
         mask = prob <= thresh
+        
         num_selected = int(mask.sum().item())
         if num_selected < min_keep:
             topk_idx = torch.argsort(prob.detach())[:min_keep]
@@ -685,11 +705,11 @@ def _tea_update_one_video(
             mask[topk_idx] = True
             num_selected = int(mask.sum().item())
 
-        logit_sel = logit[mask]
-        prob_sel = prob[mask]
+        #logit_sel = logit[mask]
+        #prob_sel = prob[mask]
 
-        E_real = F.softplus(logit_sel).mean()
-        loss = E_real
+        #E_real = F.softplus(logit_sel).mean()
+        #loss = E_real
 
 
         # local prototype을 normal 후보를 뽑는 데에 도움을 받자 실험용 
@@ -781,7 +801,11 @@ def _tea_update_one_video(
         x_sel_2048 = adapter_episode(x_sel)
         _, logit_real = model(x_sel_2048, return_logits=True)
         logit_real = logit_real.squeeze(-1)
-        E_real = F.softplus(logit_real).mean()
+        tau = 0.3   # temperature; lower = more peaked toward the most confident normals
+        with torch.no_grad():
+            w = torch.softmax(-prob_sel / tau, dim=0)  # (N,)  lower prob_sel = higher weight
+        E_real = (w * F.softplus(logit_real)).sum()       
+        #E_real = F.softplus(logit_real).mean()
 
         # 3) SGLD fake 생성
         x_tilde = (x_sel + sgld_noise * torch.randn_like(x_sel)).detach()
@@ -814,12 +838,13 @@ def _tea_update_one_video(
         loss = E_real
 
         #lambda 앵커 추가로 strong detector에서 성능 하락 방지 loss = E_real + lambda_anchor * ||ln - ln_init||^2-----------
-        lambda_anchor = 1e-4
+        lambda_anchor = 1e-3
         anchor = ((adapter_episode.ln.weight - ln_weight_init) ** 2).sum()\
         +  ((adapter_episode.ln.bias - ln_bias_init) ** 2).sum()
         #loss = F.relu(E_real-E_fake) + lambda_anchor * anchor
         #loss = E_real + lambda_anchor * anchor
-
+        #loss = (E_real - E_fake) + lambda_anchor * anchor
+    
 
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -908,7 +933,9 @@ def eval_xd_with_episodic_tea(
     for vid_idx in range(len(nalist)):
         s, e = nalist[vid_idx]
         x_video_np = X_flat[s:e]                            # (T_i,1024)
+        #print("before normalize:", X_flat[s:e].shape)
         x_video_np = _normalize_video_feature_shape(x_video_np)
+        #print("after normalize :", x_video_np.shape)
         x_video = torch.from_numpy(x_video_np).float().to(device)
 
         # 비디오마다 adapter 리셋
@@ -1408,6 +1435,189 @@ def test_occ(dataloader, model, args, device, center=None):
 
 
 
+# 데모용 score 저장 유틸 ------------------------------------------------
+import json
+from pathlib import Path
+
+def summarize_demo_candidates(seg_scores_all, nalist, out_csv_path, video_names=None, top_k_mean=5):
+    """
+    비디오별 점수 요약 csv 저장:
+    - max score
+    - mean score
+    - top-k 평균
+    - 길이(T)
+    """
+    rows = []
+
+    for vid_idx in range(len(nalist)):
+        s, e = map(int, nalist[vid_idx])
+        scores = np.asarray(seg_scores_all[s:e], dtype=np.float32)
+
+        if len(scores) == 0:
+            continue
+
+        name = video_names[vid_idx] if video_names is not None and vid_idx < len(video_names) else f"video_{vid_idx}"
+        k = min(top_k_mean, len(scores))
+        topk_mean = float(np.sort(scores)[-k:].mean())
+
+        rows.append({
+            "vid_idx": vid_idx,
+            "video_name": name,
+            "start": s,
+            "end": e,
+            "T": e - s,
+            "score_max": float(scores.max()),
+            "score_mean": float(scores.mean()),
+            "score_topk_mean": topk_mean,
+        })
+
+    rows = sorted(rows, key=lambda x: (-x["score_max"], -x["score_topk_mean"], -x["score_mean"]))
+
+    out_csv_path = Path(out_csv_path)
+    out_csv_path.parent.mkdir(parents=True, exist_ok=True)
+
+    import csv
+    with open(out_csv_path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"[saved] candidate summary csv -> {out_csv_path}")
+    return rows
+
+
+def save_video_score_plots(seg_scores_all, nalist, out_dir, video_names=None, threshold=None, top_n=None):
+    """
+    비디오별 score timeline plot 저장
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    num_videos = len(nalist) if top_n is None else min(top_n, len(nalist))
+
+    for vid_idx in range(num_videos):
+        s, e = map(int, nalist[vid_idx])
+        scores = np.asarray(seg_scores_all[s:e], dtype=np.float32)
+
+        if len(scores) == 0:
+            continue
+
+        name = video_names[vid_idx] if video_names is not None and vid_idx < len(video_names) else f"video_{vid_idx}"
+
+        plt.figure(figsize=(10, 3.5))
+        plt.plot(np.arange(len(scores)), scores, linewidth=1.5)
+        if threshold is not None:
+            plt.axhline(threshold, linestyle="--")
+
+        plt.title(f"{name} | vid_idx={vid_idx} | T={e-s}")
+        plt.xlabel("segment index")
+        plt.ylabel("anomaly score")
+        plt.tight_layout()
+
+        safe_name = str(name).replace("/", "_").replace("\\", "_")
+        plt.savefig(out_dir / f"{vid_idx:03d}_{safe_name}.png", dpi=150)
+        plt.close()
+
+    print(f"[saved] score plots -> {out_dir}")
+
+
+def export_demo_jsons(
+    seg_scores_adapted,
+    nalist,
+    out_dir,
+    video_names=None,
+    fps=30,
+    frames_per_seg=16,
+    warmup_segments=5,
+    display_reference=0.10,
+    selected_vid_indices=None,
+    actual_video_duration_map=None,
+    seg_scores_baseline=None,   # 추가
+):
+    """
+    데모 앱용 JSON export
+    - manifest.json
+    - camXX_scores.json 여러 개
+    """
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if selected_vid_indices is None:
+        selected_vid_indices = list(range(len(nalist)))
+
+    manifest = {
+        "projectTitle": "Anomaly Detection in Surveillance Video",
+        "warmupSegments": warmup_segments,
+        "videos": []
+    }
+
+    cam_counter = 1
+
+    for vid_idx in selected_vid_indices:
+        s, e = map(int, nalist[vid_idx])
+
+        scores_adapted = np.asarray(seg_scores_adapted[s:e], dtype=np.float32)
+        if len(scores_adapted) == 0:
+            continue
+
+        scores_baseline = None
+        if seg_scores_baseline is not None:
+            scores_baseline = np.asarray(seg_scores_baseline[s:e], dtype=np.float32)
+
+        video_name = (
+            video_names[vid_idx]
+            if video_names is not None and vid_idx < len(video_names)
+            else f"video_{vid_idx}"
+        )
+        video_id = f"cam{cam_counter:02d}"
+
+        segment_duration_sec = frames_per_seg / fps
+        duration_sec = len(scores_adapted) * segment_duration_sec
+
+        if actual_video_duration_map is not None:
+            if vid_idx in actual_video_duration_map:
+                duration_sec = float(actual_video_duration_map[vid_idx])
+                segment_duration_sec = duration_sec / max(len(scores_adapted), 1)
+            elif video_name in actual_video_duration_map:
+                duration_sec = float(actual_video_duration_map[video_name])
+                segment_duration_sec = duration_sec / max(len(scores_adapted), 1)
+
+        data = {
+            "videoId": video_id,
+            "sourceVideoName": video_name,
+            "fps": fps,
+            "durationSec": float(duration_sec),
+            "scoreType": "segment",
+            "segmentDurationSec": float(segment_duration_sec),
+            "warmupSegments": warmup_segments,
+            "stateMode": "adaptive_from_warmup",
+            "displayReference": float(display_reference),
+            "scoresAdapted": scores_adapted.astype(float).tolist(),
+        }
+
+        if scores_baseline is not None:
+            data["scoresBaseline"] = scores_baseline.astype(float).tolist()
+
+        with open(out_dir / f"{video_id}_scores.json", "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        manifest["videos"].append({
+            "id": video_id,
+            "cameraName": f"Camera {cam_counter:02d}",
+            "location": video_name,
+            "videoPath": f"/videos/{video_id}.mp4",
+            "scorePath": f"/data/{video_id}_scores.json"
+        })
+
+        cam_counter += 1
+
+    with open(out_dir / "manifest.json", "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+    print(f"[saved] demo jsons -> {out_dir}")
+
+
 # ---------------------------------------------------------------------------------
 # Main test loop
 # ---------------------------------------------------------------------------------
@@ -1443,7 +1653,7 @@ if __name__ == '__main__':
     #변경(추가) 부분. 1024 차원으로 들어오는 TEST 데이터 -> 2048 
     #adapter = CopyPlusExtraAdapter(d=1024, use_ln=True).to(device)
     adapter = ResidualAdapter2048(d = 2048, use_ln = True).to(device)
-    #torch.save(adapter.state_dict(), "adapter_init.pt") #baseline adapter 고정(저장) - 초기 1번만
+    torch.save(adapter.state_dict(), "adapter_init.pt") #baseline adapter 고정(저장) - 초기 1번만
     adapter.load_state_dict(torch.load("adapter_init.pt",  map_location=device))
     adapter.eval()
 
@@ -1452,7 +1662,7 @@ if __name__ == '__main__':
     model = Model_V2_AllCNN(args.feature_size).to(device)
     #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../C2FPL/ckpt/UCFfinal(git).pkl').items()})
     #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('unsupervised_ckpt/UCF_final_20260218_165841_tgkaplua.pkl').items()})  #train from scratch and evaluate
-    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_all_cnn_best_20260328_131600_rge7fhu1.pkl').items()})
+    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_all_cnn_final_20260331_133608_6mt2yybz.pkl').items()})
     
     #ckpt = torch.load('unsupervised_ckpt/UCF_best_20260323_123936_spychkjs.pkl', map_location=device)
     #state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
@@ -1478,7 +1688,7 @@ if __name__ == '__main__':
     print("\n[BASELINE]")
     print("AUC:", res_base["auc"])
     print("AP :", res_base["ap"])
-    
+
 
 
     '''
@@ -1583,6 +1793,70 @@ if __name__ == '__main__':
     print("\n[PREFIX WARM-UP TEA]")
     print("AUC:", res_tea_warm["auc"])
     print("AP :", res_tea_warm["ap"])
+    
+
+    
+    # --------------------------------------------------
+    # Demo candidate analysis / export
+    # --------------------------------------------------
+
+    # 비디오 이름 로드
+    video_names = load_video_names("list/ucf-i3d_test_fixed_local.list")
+    
+    # 1) baseline 후보 영상 요약 csv
+    base_rows = summarize_demo_candidates(
+        seg_scores_all=res_base["seg_scores_all"],
+        nalist=nalist,
+        out_csv_path="demo_exports/base_candidate_summary.csv",
+        video_names=video_names,
+        top_k_mean=5,
+    )
+
+    # 2) baseline 전체 score plot 저장
+    save_video_score_plots(
+        seg_scores_all=res_base["seg_scores_all"],
+        nalist=nalist,
+        out_dir="demo_exports/base_plots",
+        video_names=video_names,
+        threshold=0.2,
+    )
+
+    # 3) warm-up TEA 쪽도 같이 보고 싶으면 저장
+    tea_rows = summarize_demo_candidates(
+        seg_scores_all=res_tea_warm["seg_scores_all"],
+        nalist=nalist,
+        out_csv_path="demo_exports/tea_warm_candidate_summary.csv",
+        video_names=video_names,
+        top_k_mean=5,
+    )
+
+    save_video_score_plots(
+        seg_scores_all=res_tea_warm["seg_scores_all"],
+        nalist=nalist,
+        out_dir="demo_exports/tea_warm_plots",
+        video_names=video_names,
+        threshold=0.2,
+    )
+
+    # 4) 우선 csv 보고 직접 4개 고른 다음, 그 vid_idx를 넣어서 JSON export
+    # 예시: 일단 임시로 4개 지정
+    selected_vid_indices = [17, 30, 97, 230]
+
+    export_demo_jsons(
+        seg_scores_adapted=res_tea_warm["seg_scores_all"],
+        seg_scores_baseline=res_base["seg_scores_all"],   # 추가
+        nalist=nalist,
+        out_dir="demo_exports/demo_json_base",
+        video_names=video_names,
+        fps=30,
+        frames_per_seg=16,
+        warmup_segments=5,
+        display_reference=0.10,
+        selected_vid_indices=selected_vid_indices,
+        actual_video_duration_map=None,
+    )
+    
+
     '''
     # 비디오 이름이 있으면 같이 넣기
     video_names = load_video_names("list/ucf-i3d_test_fixed_local.list")   # 아까 만든 함수 그대로 사용
@@ -1638,18 +1912,18 @@ if __name__ == '__main__':
 
         
 
-    '''
+    
     #부트스트랩으로 확인
     boot_res = bootstrap_video_ci(
-        seg_scores_base=res_base["seg_scores_all"],
-        seg_scores_tea=res_base_warm["seg_scores_all"],
+        seg_scores_base=res_base_warm["seg_scores_all"],
+        seg_scores_tea=res_tea_warm["seg_scores_all"],
         nalist=nalist,
         gt=gt,
         frame_repeat=16,
         n_boot=1000,
         seed=42,
     )
-    '''
+    
     
     #scores = test(test_loader, model, args, device) #UCF
     #scores = test_2(test_loader, model, adapter, args, device) #XD
