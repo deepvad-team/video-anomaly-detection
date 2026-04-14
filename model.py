@@ -99,18 +99,18 @@ class Model_V2_AllCNN(nn.Module):
         self.conv_att1 = nn.Conv1d(n_features, 256, kernel_size, padding=kernel_size//2)
         
         # Layer 2: 512 → 128 (WITH temporal!)
-        self.conv2 = nn.Conv1d(256, 32, kernel_size, padding=kernel_size//2)
+        self.conv2 = nn.Conv1d(256, 64, kernel_size, padding=kernel_size//2)
         self.bn2 = nn.BatchNorm1d(64)
         
         # Attention (also temporal!)
-        self.conv_att2 = nn.Conv1d(256, 32, kernel_size, padding=kernel_size//2)
+        self.conv_att2 = nn.Conv1d(256, 64, kernel_size, padding=kernel_size//2)
         
         # Layer 3: 128 → 32 (WITH temporal!)
         #self.conv3 = nn.Conv1d(128, 32, kernel_size, padding=kernel_size//2)
         #self.bn3 = nn.BatchNorm1d(32)
         
         # Output: Only 1 FC at the end
-        self.fc_out = nn.Linear(32, 1)
+        self.fc_out = nn.Linear(64, 1)
         
         self.dropout1 = nn.Dropout(0.2)
         self.dropout2 = nn.Dropout(0.4)
@@ -155,7 +155,7 @@ class Model_V2_AllCNN(nn.Module):
         
         # Output FC
         if use_temporal and T > 1:
-            x = x.reshape(B, T, 32)
+            x = x.reshape(B, T, 64)
         else:
             x = x.squeeze(1)
         

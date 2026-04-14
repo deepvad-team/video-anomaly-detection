@@ -8,8 +8,16 @@ python test.py \
     --feature-size 2048 \
     --gt list/gt-ucf-RTFM.npy\
     --datasetname UCF \
-    --pseudofile ../../C2FPL/Unsup_labels/UCF_unsup_labels_original_New_V88_1.5.npy\
-    --nalist-path list/nalist_test_i3d.npy
+    --pseudofile ../../minjeong/Unsup_labels/pseudo_labels_swap_90.npy \
+    --nalist-path list/nalist_test_i3d.npy \
+    --adapter_init_path adapter_init.pt \
+    --model_ckpt ../../minjeong/unsupervised_ckpt/UCF_all_cnn_final_20260414_131646_2pdea3yj.pkl \
+    --policy_ckpt safe_meta_policy_ckpt/safe_meta_policy_best.pt \
+
+    #--gate_ckpt prefix_gate_best.pt \
+    #--gate_threshold 0.5 \
+    #--meta_adapter_ckpt meta_adapter_ckpt/meta_adapter_best.pt \
+    #--hyper_ckpt prefix_hyper_ckpt/prefix_hyper_best.pt \
     #--conall concat_XD_test.npy\
     #--nalist-path list/nalist_XD_test.npy
     #--xd_feat concat_XD_test.npy\

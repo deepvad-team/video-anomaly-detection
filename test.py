@@ -12,8 +12,22 @@ import time
 import os
 from model import Model, Model_V2, Model_V2_AllCNN
 from adapter import CopyPlusExtraAdapter, ResidualAdapter2048
-# from datasets.dataset import 
 import copy
+import csv
+
+from prefix_gate import PrefixGateNet, compute_prefix_stats
+
+from prefix_hyper import (
+    PrefixHyperNet,
+    build_fixed_default_adapter,
+    compute_prefix_stats as compute_hyper_prefix_stats,
+    apply_adapter_with_generated_ln,
+)
+
+from safe_meta_policy import SafeMetaPolicyNet, policy_inner_update
+from prefix_hyper import build_fixed_default_adapter
+
+
 
 #UCF
 def test(dataloader, model, args, device):
@@ -135,7 +149,10 @@ def run_one_video(X_flat, nalist, vid_idx, adapter, model, device):
     } 
 
 
+
+
 def get_video_scores_and_mask(X_flat, nalist, vid_idx, adapter, model, device, q=0.5):
+
     """
     q: 하위 q 비율을 normal 후보로 선택
        예) q=0.5 -> 하위 50%
@@ -173,6 +190,7 @@ def get_video_scores_and_mask(X_flat, nalist, vid_idx, adapter, model, device, q
         "mask": mask,                   # (T_i,) bool
         "num_selected": int(mask.sum().item())
     }
+
 
 
 def inspect_video_energy_terms(
@@ -292,9 +310,130 @@ def inspect_video_energy_terms(
         "prob_fake_mean": float(prob_fake.mean().item()),
     }
 
+
+
+# ---------------------------
+# Experiments util
+# ---------------------------
+
+'''
+def load_prefix_hyper(hyper_ckpt, device):
+    ckpt = torch.load(hyper_ckpt, map_location=device)
+
+    hypernet = PrefixHyperNet(
+        stats_dim=ckpt["stats_dim"],
+        feat_dim=ckpt["feat_dim"],
+        hidden_dim=ckpt["hidden_dim"],
+        delta_scale=ckpt["delta_scale"],
+    ).to(device)
+
+    hypernet.load_state_dict(ckpt["hyper_state_dict"], strict=True)
+    hypernet.eval()
+
+    print(f"[Prefix Hyper] loaded from {hyper_ckpt}")
+    return hypernet
+'''
+
+
+def load_safe_meta_policy(policy_ckpt, device):
+    ckpt = torch.load(policy_ckpt, map_location=device)
+
+    policy_net = SafeMetaPolicyNet(
+        warmup_segments=ckpt["warmup_segments"],
+        stats_dim=ckpt["stats_dim"],
+        hidden_dim=ckpt["hidden_dim"],
+        lr_max=ckpt["lr_max"],
+    ).to(device)
+
+    policy_net.load_state_dict(ckpt["policy_state_dict"], strict=True)
+    policy_net.eval()
+
+    print(f"\n[Safe Meta Policy] loaded from {policy_ckpt}")
+    for name, p in policy_net.named_parameters():
+        print("[Policy param check]", name, p.abs().mean().item())
+        break
+    return policy_net
+
+
+
+def load_detector_model(args, device):
+    model = Model_V2_AllCNN(args.feature_size).to(device)
+
+    ckpt = torch.load(args.model_ckpt, map_location=device)
+
+    if isinstance(ckpt, dict) and "model" in ckpt:
+        ckpt = ckpt["model"]
+
+    ckpt = {k.replace("module.", ""): v for k, v in ckpt.items()}
+    model.load_state_dict(ckpt, strict=True)
+    model.eval()
+
+    print(f"[Model] loaded from: {args.model_ckpt}")
+    return model
+
+
+# gate 실험 -------------------------------------
+def build_fixed_default_adapter(device, init_ckpt="adapter_init.pt"):
+    adapter = ResidualAdapter2048(d=2048, use_ln=True).to(device)
+
+    if os.path.exists(init_ckpt):
+        adapter.load_state_dict(torch.load(init_ckpt, map_location=device))
+        print(f"[Adapter Init] loaded fixed init from {init_ckpt}")
+    else:
+        torch.save(adapter.state_dict(), init_ckpt)
+        print(f"[Adapter Init] saved new fixed init to {init_ckpt}")
+
+    adapter.eval()
+    return adapter
+
+
+
+def load_gate_model(gate_ckpt, device):
+    if gate_ckpt is None:
+        return None, None, None
+
+    ckpt = torch.load(gate_ckpt, map_location=device, weights_only=False)
+
+    gate = PrefixGateNet(
+        in_dim=ckpt["in_dim"],
+        hidden_dim=ckpt["hidden_dim"]
+    ).to(device)
+
+    gate.load_state_dict(ckpt["gate_state_dict"], strict=True)
+    gate.eval()
+
+    feat_mean = torch.tensor(ckpt["feat_mean"], dtype=torch.float32, device=device)
+    feat_std = torch.tensor(ckpt["feat_std"], dtype=torch.float32, device=device)
+
+    print(f"[Gate] loaded from {gate_ckpt}")
+    return gate, feat_mean, feat_std
+
+
+
+
 # ---------------------------------------------------------------------------------
 # TEA helper (episodic)
 # ---------------------------------------------------------------------------------
+
+def _segment_gt_from_gt(gt, total_T, frame_repeat=16):
+    gt = np.asarray(gt).astype(np.int64).reshape(-1)
+
+    if len(gt) == total_T:
+        seg_gt = gt
+        gt_mode = "segment"
+    elif len(gt) == total_T * frame_repeat:
+        seg_gt = gt.reshape(total_T, frame_repeat).max(axis=1)
+        gt_mode = "frame"
+    else:
+        raise ValueError(
+            f"GT length mismatch: len(gt)={len(gt)}, total_T={total_T}, "
+            f"expected {total_T} or {total_T * frame_repeat}"
+        )
+    return seg_gt, gt_mode
+
+
+
+
 
 
 # 정상 후보 선택 시 연속된 segment인 경우만 뽑도록 기준을 강화하는 실험용 helper 함수들 ------------------------------------------------------------------------
@@ -319,6 +458,7 @@ def _find_consecutive_true_runs(mask_np, min_run=2):
         idx.extend(range(start, len(mask_np)))
 
     return idx
+
 
 def _select_normal_mask_strict(prob, q=0.1, min_keep=8, min_run=2):
     """
@@ -357,21 +497,6 @@ def _select_normal_mask_strict(prob, q=0.1, min_keep=8, min_run=2):
 
 
 
-def _segment_gt_from_gt(gt, total_T, frame_repeat=16):
-    gt = np.asarray(gt).astype(np.int64).reshape(-1)
-
-    if len(gt) == total_T:
-        seg_gt = gt
-        gt_mode = "segment"
-    elif len(gt) == total_T * frame_repeat:
-        seg_gt = gt.reshape(total_T, frame_repeat).max(axis=1)
-        gt_mode = "frame"
-    else:
-        raise ValueError(
-            f"GT length mismatch: len(gt)={len(gt)}, total_T={total_T}, "
-            f"expected {total_T} or {total_T * frame_repeat}"
-        )
-    return seg_gt, gt_mode
 
 
 
@@ -482,6 +607,7 @@ def _select_mask_by_local_prototype(
 
 
 
+
 # 4-1. local prototype only 실험용 helper 함수들 ------------------------------------------------------------------------
 
 def _compute_local_proto_scores_one_video(
@@ -585,6 +711,9 @@ def eval_xd_local_prototype_only(
 
 
 
+# ---------------------------------------------------------------------------------
+# 핵심 - tea step 을 담당하는 함수
+# ---------------------------------------------------------------------------------
 
 def _tea_update_one_video(
     x_video,          # torch tensor, (T_i, 1024)
@@ -911,6 +1040,10 @@ def eval_xd_with_episodic_tea(
     warmup_segments=5,
 
     verbose_every=100,
+    gate_model=None,
+    gate_feat_mean=None,
+    gate_feat_std=None,
+    gate_threshold=0.5,
 ):
     """
     XD 전체 test셋:
@@ -941,7 +1074,7 @@ def eval_xd_with_episodic_tea(
         # 비디오마다 adapter 리셋
         adapter_episode = copy.deepcopy(adapter).to(device)
         adapter_episode.eval()
-        
+        '''
         # 1) optional TEA
         if use_tea:
             adapter_episode, debug = _tea_update_one_video(
@@ -964,7 +1097,60 @@ def eval_xd_with_episodic_tea(
             )
         else:
             debug = None
+        '''
+    
+        # gate 실험 ------------------------------------------------------
+        # 1) gate로 이번 비디오에서 TTA를 할지 결정
+        apply_tea_this_video = use_tea
+        gate_prob = None
+
+        if use_tea and gate_model is not None:
+            prefix_stats = compute_prefix_stats(
+                x_video_np=x_video_np,
+                adapter=adapter_episode,
+                model=model,
+                device=device,
+                warmup_segments=warmup_segments,
+            )   # (7,)
+
+            prefix_stats_norm = (prefix_stats - gate_feat_mean) / (gate_feat_std + 1e-6)
+
+            with torch.no_grad():
+                gate_logit = gate_model(prefix_stats_norm.unsqueeze(0))   # (1,)
+                gate_prob = torch.sigmoid(gate_logit).item()
+
+            apply_tea_this_video = (gate_prob >= gate_threshold)
+
+        # 2) optional TEA
+        if apply_tea_this_video:
+            adapter_episode, debug = _tea_update_one_video(
+                x_video=x_video,
+                adapter_episode=adapter_episode,
+                model=model,
+                q=q,
+                min_keep=min_keep,
+                min_run=min_run,
+                sgld_steps=sgld_steps,
+                sgld_lr=sgld_lr,
+                sgld_noise=sgld_noise,
+                tea_lr=tea_lr,
+                tea_steps_per_video=tea_steps_per_video,
+                selection_mode=selection_mode,
+                n_reference=n_reference,
+                proto_l2_normalize=proto_l2_normalize,
+                adapt_prefix_only=adapt_prefix_only,
+                warmup_segments=warmup_segments,
+            )
+        else:
+            debug = [{
+                "step": 0,
+                "skipped": True,
+                "reason": "gate_skip" if gate_model is not None else "use_tea_false",
+                "gate_prob": gate_prob,
+                "gate_threshold": gate_threshold,
+            }]
         
+        # ---------------------------------------------------------------------------------
 
         # 2) adaptation 후 최종 inference
         adapter_episode.eval()
@@ -1032,6 +1218,402 @@ def eval_xd_with_episodic_tea(
 
 
 
+
+
+def eval_xd_with_prefix_hyper(
+    X_flat,
+    nalist,
+    gt,
+    base_adapter,
+    hypernet,
+    model,
+    device,
+    frame_repeat=16,
+    exclude_prefix_from_eval=True,
+    warmup_segments=5,
+    verbose_every=100,
+):
+    total_T = X_flat.shape[0]
+    seg_gt, gt_mode = _segment_gt_from_gt(gt, total_T, frame_repeat=frame_repeat)
+
+    model.eval()
+    seg_scores_all = np.zeros(total_T, dtype=np.float32)
+    hyper_logs = []
+
+    gamma0 = base_adapter.ln.weight.detach()
+    beta0 = base_adapter.ln.bias.detach()
+
+    for vid_idx in range(len(nalist)):
+        s, e = nalist[vid_idx]
+        x_video_np = X_flat[s:e]
+        x_video_np = _normalize_video_feature_shape(x_video_np)
+        x_video = torch.from_numpy(x_video_np).float().to(device)
+
+        stats = compute_hyper_prefix_stats(
+            x_video_np=x_video_np,
+            adapter=base_adapter,
+            model=model,
+            device=device,
+            warmup_segments=warmup_segments,
+        )
+
+        with torch.no_grad():
+            gamma, beta, g, dgamma, dbeta = hypernet(
+                stats.unsqueeze(0), gamma0, beta0
+            )
+
+            x_video_in = x_video.unsqueeze(0)  # (1,T,D)
+            x_2048 = apply_adapter_with_generated_ln(
+                x_video_in, base_adapter, gamma[0], beta[0]
+            )
+
+            prob, _ = model(x_2048, return_logits=True)
+
+        prob = prob[0, :, 0].detach().cpu().numpy()
+        seg_scores_all[s:e] = prob
+
+        hyper_logs.append({
+            "vid_idx": vid_idx,
+            "start": int(s),
+            "end": int(e),
+            "T": int(e - s),
+            "gate": float(g.item()),
+            "dgamma_norm": float(dgamma.norm().item()),
+            "dbeta_norm": float(dbeta.norm().item()),
+        })
+
+        if (vid_idx % verbose_every == 0) or (vid_idx == len(nalist) - 1):
+            print(f"[HYPER {vid_idx+1}/{len(nalist)}] done, T={e-s}, gate={float(g.item()):.4f}")
+
+    if exclude_prefix_from_eval:
+        eval_mask_seg = _build_eval_mask_from_nalist(
+            total_T=total_T,
+            nalist=nalist,
+            warmup_segments=warmup_segments,
+        )
+    else:
+        eval_mask_seg = np.ones(total_T, dtype=bool)
+
+    if gt_mode == "segment":
+        y_true = seg_gt[eval_mask_seg]
+        y_score = seg_scores_all[eval_mask_seg]
+    else:
+        y_true = np.asarray(gt).reshape(-1)
+        y_score = np.repeat(seg_scores_all, frame_repeat)
+        eval_mask_frame = np.repeat(eval_mask_seg, frame_repeat)
+
+        min_len = min(len(y_true), len(y_score), len(eval_mask_frame))
+        y_true = y_true[:min_len]
+        y_score = y_score[:min_len]
+        eval_mask_frame = eval_mask_frame[:min_len]
+
+        y_true = y_true[eval_mask_frame]
+        y_score = y_score[eval_mask_frame]
+
+    auc = roc_auc_score(y_true, y_score)
+    ap = average_precision_score(y_true, y_score)
+
+    return {
+        "auc": float(auc),
+        "ap": float(ap),
+        "seg_scores_all": seg_scores_all,
+        "hyper_logs": hyper_logs,
+        "eval_mask_seg": eval_mask_seg,
+    }
+
+
+
+'''
+# standalone policy 성능을 보는 용도
+def eval_xd_with_safe_meta_policy(
+    X_flat,
+    nalist,
+    gt,
+    adapter,
+    policy_net,
+    model,
+    device,
+    frame_repeat=16,
+    exclude_prefix_from_eval=True,
+    warmup_segments=5,
+    inner_steps=3,
+    gate_threshold=0.20,
+    verbose_every=100,
+):
+    total_T = X_flat.shape[0]
+    seg_gt, gt_mode = _segment_gt_from_gt(gt, total_T, frame_repeat=frame_repeat)
+
+    model.eval()
+    seg_scores_all = np.zeros(total_T, dtype=np.float32)
+    policy_logs = []
+
+    for vid_idx in range(len(nalist)):
+        s, e = nalist[vid_idx]
+        x_video_np = X_flat[s:e]
+        x_video_np = _normalize_video_feature_shape(x_video_np)
+
+        gamma_adapt, beta_adapt, debug = policy_inner_update(
+            x_video_np=x_video_np,
+            base_adapter=adapter,
+            model=model,
+            policy_net=policy_net,
+            device=device,
+            warmup_segments=warmup_segments,
+            inner_steps=inner_steps,
+            create_graph=False,
+            gate_threshold=gate_threshold,
+        )
+
+        x_video = torch.from_numpy(x_video_np).float().to(device)
+        x_video_in = x_video.unsqueeze(0)
+
+        with torch.no_grad():
+            x_2048 = apply_adapter_with_generated_ln(
+                x_video_in, adapter, gamma_adapt, beta_adapt
+            )
+            prob, _ = model(x_2048, return_logits=True)
+
+        prob = prob[0, :, 0].detach().cpu().numpy()
+        seg_scores_all[s:e] = prob
+
+        policy_logs.append({
+            "vid_idx": vid_idx,
+            "start": int(s),
+            "end": int(e),
+            "T": int(e - s),
+            "debug": debug,
+        })
+
+        if (vid_idx % verbose_every == 0) or (vid_idx == len(nalist) - 1):
+            gate_str = debug.get("gate", None)
+            print(f"[POLICY {vid_idx+1}/{len(nalist)}] done, T={e-s}, gate={gate_str}")
+
+    if exclude_prefix_from_eval:
+        eval_mask_seg = _build_eval_mask_from_nalist(
+            total_T=total_T,
+            nalist=nalist,
+            warmup_segments=warmup_segments,
+        )
+    else:
+        eval_mask_seg = np.ones(total_T, dtype=bool)
+
+    if gt_mode == "segment":
+        y_true = seg_gt[eval_mask_seg]
+        y_score = seg_scores_all[eval_mask_seg]
+    else:
+        y_true = np.asarray(gt).reshape(-1)
+        y_score = np.repeat(seg_scores_all, frame_repeat)
+        eval_mask_frame = np.repeat(eval_mask_seg, frame_repeat)
+
+        min_len = min(len(y_true), len(y_score), len(eval_mask_frame))
+        y_true = y_true[:min_len]
+        y_score = y_score[:min_len]
+        eval_mask_frame = eval_mask_frame[:min_len]
+
+        y_true = y_true[eval_mask_frame]
+        y_score = y_score[eval_mask_frame]
+
+    auc = roc_auc_score(y_true, y_score)
+    ap = average_precision_score(y_true, y_score)
+
+    return {
+        "auc": float(auc),
+        "ap": float(ap),
+        "seg_scores_all": seg_scores_all,
+        "policy_logs": policy_logs,
+        "eval_mask_seg": eval_mask_seg,
+    }
+
+
+
+'''
+def build_policy_initialized_adapter(
+    x_video_np,
+    base_adapter,
+    policy_net,
+    model,
+    device,
+    warmup_segments=5,
+    inner_steps=3,
+    gate_threshold=0.20,
+):
+    """
+    policy가 만든 gamma/beta를 base adapter의 LN에 주입한
+    adapter_episode를 반환
+    """
+    gamma_adapt, beta_adapt, policy_debug = policy_inner_update(
+        x_video_np=x_video_np,
+        base_adapter=base_adapter,
+        model=model,
+        policy_net=policy_net,
+        device=device,
+        warmup_segments=warmup_segments,
+        inner_steps=inner_steps,
+        create_graph=False,
+        gate_threshold=gate_threshold,
+    )
+
+    adapter_episode = copy.deepcopy(base_adapter).to(device)
+
+    with torch.no_grad():
+        adapter_episode.ln.weight.copy_(gamma_adapt)
+        adapter_episode.ln.bias.copy_(beta_adapt)
+
+    adapter_episode.eval()
+    return adapter_episode, policy_debug
+
+
+
+def eval_xd_with_policy_then_tea(
+    X_flat,
+    nalist,
+    gt,
+    adapter,
+    policy_net,
+    model,
+    device,
+    frame_repeat=16,
+
+    # policy init
+    policy_inner_steps=3,
+    policy_gate_threshold=0.20,
+
+    # TEA
+    use_tea=True,
+    q=1.0,
+    min_keep=8,
+    min_run=2,
+    sgld_steps=10,
+    sgld_lr=0.05,
+    sgld_noise=0.01,
+    tea_lr=1e-2,
+    tea_steps_per_video=30,
+    selection_mode="score",
+    n_reference=5,
+    proto_l2_normalize=False,
+
+    # eval protocol
+    exclude_prefix_from_eval=True,
+    adapt_prefix_only=True,
+    warmup_segments=5,
+    verbose_every=100,
+):
+    total_T = X_flat.shape[0]
+    seg_gt, gt_mode = _segment_gt_from_gt(gt, total_T, frame_repeat=frame_repeat)
+
+    model.eval()
+    for p in model.parameters():
+        p.requires_grad_(False)
+
+    seg_scores_all = np.zeros(total_T, dtype=np.float32)
+    logs = []
+
+    for vid_idx in range(len(nalist)):
+        s, e = nalist[vid_idx]
+        x_video_np = X_flat[s:e]
+        x_video_np = _normalize_video_feature_shape(x_video_np)
+        x_video = torch.from_numpy(x_video_np).float().to(device)
+
+        # 1) policy로 먼저 LN 초기화
+        adapter_episode, policy_debug = build_policy_initialized_adapter(
+            x_video_np=x_video_np,
+            base_adapter=adapter,
+            policy_net=policy_net,
+            model=model,
+            device=device,
+            warmup_segments=warmup_segments,
+            inner_steps=policy_inner_steps,
+            gate_threshold=policy_gate_threshold,
+        )
+
+        # 2) 그 보정된 adapter 상태에서 기존 TEA refinement
+        if use_tea:
+            adapter_episode, tea_debug = _tea_update_one_video(
+                x_video=x_video,
+                adapter_episode=adapter_episode,
+                model=model,
+                q=q,
+                min_keep=min_keep,
+                min_run=min_run,
+                sgld_steps=sgld_steps,
+                sgld_lr=sgld_lr,
+                sgld_noise=sgld_noise,
+                tea_lr=tea_lr,
+                tea_steps_per_video=tea_steps_per_video,
+                selection_mode=selection_mode,
+                n_reference=n_reference,
+                proto_l2_normalize=proto_l2_normalize,
+                adapt_prefix_only=adapt_prefix_only,
+                warmup_segments=warmup_segments,
+            )
+        else:
+            tea_debug = None
+
+        # 3) 최종 inference
+        adapter_episode.eval()
+        with torch.no_grad():
+            x_video_in = x_video.unsqueeze(0)      # (1,T,D)
+            x_2048 = adapter_episode(x_video_in)   # 표준 adapter path
+            prob, _ = model(x_2048, return_logits=True)
+
+        prob = prob[0, :, 0].detach().cpu().numpy()
+        seg_scores_all[s:e] = prob
+
+        logs.append({
+            "vid_idx": vid_idx,
+            "start": int(s),
+            "end": int(e),
+            "T": int(e - s),
+            "policy_debug": policy_debug,
+            "tea_debug": tea_debug,
+        })
+
+        if (vid_idx % verbose_every == 0) or (vid_idx == len(nalist) - 1):
+            print(
+                f"[POLICY->TEA {vid_idx+1}/{len(nalist)}] "
+                f"done, T={e-s}, gate={policy_debug.get('gate', None)}"
+            )
+
+    # 4) metric
+    if exclude_prefix_from_eval:
+        eval_mask_seg = _build_eval_mask_from_nalist(
+            total_T=total_T,
+            nalist=nalist,
+            warmup_segments=warmup_segments,
+        )
+    else:
+        eval_mask_seg = np.ones(total_T, dtype=bool)
+
+    if gt_mode == "segment":
+        y_true = seg_gt[eval_mask_seg]
+        y_score = seg_scores_all[eval_mask_seg]
+    else:
+        y_true = np.asarray(gt).reshape(-1)
+        y_score = np.repeat(seg_scores_all, frame_repeat)
+        eval_mask_frame = np.repeat(eval_mask_seg, frame_repeat)
+
+        min_len = min(len(y_true), len(y_score), len(eval_mask_frame))
+        y_true = y_true[:min_len]
+        y_score = y_score[:min_len]
+        eval_mask_frame = eval_mask_frame[:min_len]
+
+        y_true = y_true[eval_mask_frame]
+        y_score = y_score[eval_mask_frame]
+
+    auc = roc_auc_score(y_true, y_score)
+    ap = average_precision_score(y_true, y_score)
+
+    return {
+        "auc": float(auc),
+        "ap": float(ap),
+        "seg_scores_all": seg_scores_all,
+        "logs": logs,
+        "eval_mask_seg": eval_mask_seg,
+    }
+
+
+
+# 결과 분석용 유틸 ------------------------------------------------
 
 def bootstrap_video_ci(
     seg_scores_base,     # (total_T,)
@@ -1134,13 +1716,6 @@ def bootstrap_video_ci(
     }
 
 
-
-import os
-import csv
-import copy
-import numpy as np
-import matplotlib.pyplot as plt
-import torch
 def frame_gt_to_segment_gt(gt_frame, total_T, frame_repeat=16):
     gt_frame = np.asarray(gt_frame).reshape(-1)
 
@@ -1149,6 +1724,7 @@ def frame_gt_to_segment_gt(gt_frame, total_T, frame_repeat=16):
 
     gt_seg = gt_frame.reshape(total_T, frame_repeat).max(axis=1).astype(np.int64)
     return gt_seg
+
 
 def analyze_prefix_selection_score(
     X_flat,
@@ -1277,6 +1853,7 @@ def analyze_prefix_selection_score(
     return rows, video_debug
 
 
+
 def plot_prefix_selection_examples(
     video_debug,
     save_dir="prefix_selection_plots",
@@ -1324,7 +1901,9 @@ def plot_prefix_selection_examples(
         plt.close()
 
     print(f"\nSaved plots to: {save_dir}")
-   
+
+
+
 def normalize_name(x):
     x = x.strip()
 
@@ -1343,6 +1922,8 @@ def normalize_name(x):
         x = x[2:]
 
     return x 
+
+
 def load_video_names(list_path):
     names = []
     with open(list_path, "r", encoding="utf-8") as f:
@@ -1355,6 +1936,8 @@ def load_video_names(list_path):
             names.append(name)
 
     return names
+
+
 
 def _normalize_video_feature_shape(x_video_np):
     """
@@ -1391,51 +1974,12 @@ def _normalize_video_feature_shape(x_video_np):
 
     raise ValueError(f"Unsupported feature shape: {x.shape}")
 
-# 0323 추가 --------------------------------------
 
-# -------------------------
-# PLOCC 
-# -------------------------
-def test_occ(dataloader, model, args, device, center=None):
-    with torch.no_grad():
-        model.eval()
-        pred = []
-
-        for input in dataloader:
-            input = input.to(device)
-            prob, feat = model(input, return_feats=True)
-
-            if args.score_mode == 'prob':
-                score = prob.squeeze(-1)
-
-            else:
-                dist = ((feat - center.unsqueeze(0).to(device)) ** 2).sum(dim=1)
-
-                if args.score_mode == 'distance':
-                    score = dist
-                else:
-                    # mix
-                    d = (dist - dist.min()) / (dist.max() - dist.min() + 1e-8)
-                    p = prob.squeeze(-1)
-                    score = args.mix_alpha * p + (1 - args.mix_alpha) * d
-
-            pred.append(score.detach().cpu().numpy())
-
-        pred_seg = np.concatenate(pred, axis=0)
-        pred_frame = np.repeat(pred_seg, 16)
-        gt = np.load(args.gt)
-
-        fpr, tpr, threshold = roc_curve(list(gt), pred_frame)
-        rec_auc = auc(fpr, tpr)
-
-        precision, recall, th = precision_recall_curve(list(gt), pred_frame)
-        pr_auc = auc(recall, precision)
-
-        return rec_auc, pr_auc
 
 
 
 # 데모용 score 저장 유틸 ------------------------------------------------
+
 import json
 from pathlib import Path
 
@@ -1618,6 +2162,9 @@ def export_demo_jsons(
     print(f"[saved] demo jsons -> {out_dir}")
 
 
+
+
+
 # ---------------------------------------------------------------------------------
 # Main test loop
 # ---------------------------------------------------------------------------------
@@ -1628,49 +2175,48 @@ if __name__ == '__main__':
 
     # 1. GT / dataset
     gt = np.load(args.gt)
-        #변경 (추가) 부분: (145649, 1024) 데이터 그대로 일단 받아오기
+
+    #변경 (추가) 부분: (145649, 1024) 데이터 그대로 일단 받아오기
     #xd_dataset = Dataset_Con_all_feedback_XD(args, test_mode=True)
     ucf_dataset = Dataset_Con_all_feedback_UCF(args, test_mode=True)
     X_flat = ucf_dataset.con_all
     nalist = np.load(args.nalist_path)
+
     print("X_flat shape:", X_flat.shape)
     print("nalist shape:", nalist.shape)
-
-    '''
-    test_loader = DataLoader(Dataset_Con_all_feedback_UCF(args, test_mode=True), 
-                            batch_size=args.batch_size, shuffle=False, 
-                            num_workers=args.workers, pin_memory=False, drop_last=False)
-    
-    '''
-    '''
-    test_loader = DataLoader(xd_dataset,
-                             batch_size=args.batch_size, shuffle=False, 
-                            num_workers=args.workers, pin_memory=False, drop_last=False)
-    
-    '''
    
     # 2. adapter
     #변경(추가) 부분. 1024 차원으로 들어오는 TEST 데이터 -> 2048 
     #adapter = CopyPlusExtraAdapter(d=1024, use_ln=True).to(device)
-    adapter = ResidualAdapter2048(d = 2048, use_ln = True).to(device)
-    torch.save(adapter.state_dict(), "adapter_init.pt") #baseline adapter 고정(저장) - 초기 1번만
-    adapter.load_state_dict(torch.load("adapter_init.pt",  map_location=device))
-    adapter.eval()
+    #adapter = ResidualAdapter2048(d = 2048, use_ln = True).to(device)
+
+    #torch.save(adapter.state_dict(), "adapter_init.pt") #baseline adapter 고정(저장) - 초기 1번만
+    #adapter.load_state_dict(torch.load("adapter_init.pt",  map_location=device))
+    #adapter.eval()
 
     # 3. model
     #model = Model_V2(args.feature_size).to(device)
-    model = Model_V2_AllCNN(args.feature_size).to(device)
+    #model = Model_V2_AllCNN(args.feature_size).to(device)
     #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../C2FPL/ckpt/UCFfinal(git).pkl').items()})
     #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('unsupervised_ckpt/UCF_final_20260218_165841_tgkaplua.pkl').items()})  #train from scratch and evaluate
-    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_all_cnn_final_20260331_133608_6mt2yybz.pkl').items()})
+    #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_all_cnn_final_20260331_133608_6mt2yybz.pkl').items()})
     
     #ckpt = torch.load('unsupervised_ckpt/UCF_best_20260323_123936_spychkjs.pkl', map_location=device)
     #state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
     #model.load_state_dict({k.replace('module.', ''): v for k, v in state_dict.items()})
 
-    model.eval()
+    #model.eval()
     
+    adapter = build_fixed_default_adapter(device=device, init_ckpt=args.adapter_init_path)
+    model = load_detector_model(args, device)
 
+    '''
+    gate_model, gate_feat_mean, gate_feat_std = load_gate_model(
+        gate_ckpt=args.gate_ckpt,
+        device=device
+    )
+    '''
+    
     
     #4. baseline (adapter로 차원만, TEA 없음)
     res_base = eval_xd_with_episodic_tea(
@@ -1681,7 +2227,6 @@ if __name__ == '__main__':
         model=model,
         device=device,
         frame_repeat=16,
-
         use_tea=False,
         verbose_every=100,
     )
@@ -1743,13 +2288,13 @@ if __name__ == '__main__':
     print("AP :", res_tea_whole["ap"])
     '''
 
-    
+    '''
     # 4-3. warm up baseline (prefix 적응은 안하지만 suffix만 평가)
     res_base_warm = eval_xd_with_episodic_tea(
         X_flat=X_flat,
         nalist=nalist,
         gt=gt,
-        adapter=adapter,
+        adapter=adapter_default,
         model=model,
         device=device,
         frame_repeat=16,
@@ -1765,7 +2310,8 @@ if __name__ == '__main__':
     print("AUC:", res_base_warm["auc"])
     print("AP :", res_base_warm["ap"])
 
-    
+    '''
+    '''
     # 4-4. warm up (prefix 적응, suffix만 평가)
     res_tea_warm = eval_xd_with_episodic_tea(
     X_flat=X_flat,
@@ -1777,7 +2323,6 @@ if __name__ == '__main__':
     frame_repeat=16,
 
     use_tea=True,
-
     q=1.0,   
     min_keep=8,
     #min_run은 여기선 의미 없음!
@@ -1793,9 +2338,157 @@ if __name__ == '__main__':
     print("\n[PREFIX WARM-UP TEA]")
     print("AUC:", res_tea_warm["auc"])
     print("AP :", res_tea_warm["ap"])
-    
+    '''
 
+    '''
+    # 4-5. gate-controlled prefix warm-up TEA
+    if gate_model is not None:
+        res_gate_warm = eval_xd_with_episodic_tea(
+            X_flat=X_flat,
+            nalist=nalist,
+            gt=gt,
+            adapter=adapter,
+            model=model,
+            device=device,
+            frame_repeat=16,
+
+            use_tea=True,
+            q=1.0,
+            min_keep=8,
+            tea_lr=1e-2,
+            tea_steps_per_video=30,
+            selection_mode="score",
+
+            adapt_prefix_only=True,
+            exclude_prefix_from_eval=True,
+            warmup_segments=5,
+
+            gate_model=gate_model,
+            gate_feat_mean=gate_feat_mean,
+            gate_feat_std=gate_feat_std,
+            gate_threshold=args.gate_threshold,
+        )
+
+        print("\n[GATE-CONTROLLED PREFIX WARM-UP TEA]")
+        print("AUC:", res_gate_warm["auc"])
+        print("AP :", res_gate_warm["ap"])
+
+        print("\n[DELTA: GATE - DEFAULT PREFIX TTA]")
+        print("ΔAUC:", res_gate_warm["auc"] - res_tea_warm["auc"])
+        print("ΔAP :", res_gate_warm["ap"] - res_tea_warm["ap"])
+    '''
+
+    '''
+    if args.hyper_ckpt is not None:
+        hypernet = load_prefix_hyper(args.hyper_ckpt, device)
+
+        res_hyper = eval_xd_with_prefix_hyper(
+            X_flat=X_flat,
+            nalist=nalist,
+            gt=gt,
+            base_adapter=adapter,
+            hypernet=hypernet,
+            model=model,
+            device=device,
+            frame_repeat=16,
+            exclude_prefix_from_eval=True,
+            warmup_segments=5,
+            verbose_every=100,
+        )
+
+        print("\n[PREFIX HYPER ONE-SHOT]")
+        print("AUC:", res_hyper["auc"])
+        print("AP :", res_hyper["ap"])
+
+        print("\n[DELTA: HYPER - PREFIX WARM-UP TEA]")
+        #print("ΔAUC:", res_hyper["auc"] - res_tea_warm["auc"])
+        #print("ΔAP :", res_hyper["ap"] - res_tea_warm["ap"])
+
+    '''
+
+
+    if args.policy_ckpt is not None:
+        policy_net = load_safe_meta_policy(args.policy_ckpt, device)
+
+        res_policy_then_tea = eval_xd_with_policy_then_tea(
+            X_flat=X_flat,
+            nalist=nalist,
+            gt=gt,
+            adapter=adapter,
+            policy_net=policy_net,
+            model=model,
+            device=device,
+            frame_repeat=16,
+
+            # policy init
+            policy_inner_steps=3,
+            policy_gate_threshold=0.20,
+
+            # TEA refinement
+            use_tea=True,
+            q=1.0,
+            min_keep=8,
+            min_run=2,
+            sgld_steps=10,
+            sgld_lr=0.05,
+            sgld_noise=0.01,
+            tea_lr=1e-2,
+            tea_steps_per_video=30,
+            selection_mode="score",
+            n_reference=5,
+            proto_l2_normalize=False,
+
+            exclude_prefix_from_eval=True,
+            adapt_prefix_only=True,
+            warmup_segments=5,
+            verbose_every=100,
+        )
+
+        print("\n[SAFE META POLICY -> TEA]")
+        print("AUC:", res_policy_then_tea["auc"])
+        print("AP :", res_policy_then_tea["ap"])
+
+        #print("\n[DELTA: POLICY->TEA - PREFIX WARM-UP TEA]")
+        #print("ΔAUC:", res_policy_then_tea["auc"] - res_tea_warm["auc"])
+        #print("ΔAP :", res_policy_then_tea["ap"] - res_tea_warm["ap"])
+
+
+    '''
+    # --------------------------------------------------
+    # C. meta adapter + prefix TTA
+    # --------------------------------------------------
     
+    if adapter_meta is not None:
+        res_warm_meta = eval_xd_with_episodic_tea(
+            X_flat=X_flat,
+            nalist=nalist,
+            gt=gt,
+            adapter=adapter_meta,
+            model=model,
+            device=device,
+            frame_repeat=16,
+
+            use_tea=True,
+            q=1.0,
+            min_keep=8,
+            tea_lr=1e-2,
+            tea_steps_per_video=15,
+            selection_mode="score",
+
+            adapt_prefix_only=True,
+            exclude_prefix_from_eval=True,
+            warmup_segments=5,
+        )
+
+        print("\n[META ADAPTER + PREFIX TTA]")
+        print("AUC:", res_warm_meta["auc"])
+        print("AP :", res_warm_meta["ap"])
+
+        #print("\n[DELTA: META - DEFAULT]")
+        #print("ΔAUC:", res_warm_meta["auc"] - res_tea_warm["auc"])
+        #print("ΔAP :", res_warm_meta["ap"] - res_tea_warm["ap"])
+    '''
+    '''
     # --------------------------------------------------
     # Demo candidate analysis / export
     # --------------------------------------------------
@@ -1857,7 +2550,7 @@ if __name__ == '__main__':
     )
     
 
-    '''
+    
     # 비디오 이름이 있으면 같이 넣기
     video_names = load_video_names("list/ucf-i3d_test_fixed_local.list")   # 아까 만든 함수 그대로 사용
     total_T = int(nalist[-1, 1])
@@ -1912,7 +2605,7 @@ if __name__ == '__main__':
 
         
 
-    
+    '''
     #부트스트랩으로 확인
     boot_res = bootstrap_video_ci(
         seg_scores_base=res_base_warm["seg_scores_all"],
@@ -1923,7 +2616,7 @@ if __name__ == '__main__':
         n_boot=1000,
         seed=42,
     )
-    
+    '''
     
     #scores = test(test_loader, model, args, device) #UCF
     #scores = test_2(test_loader, model, adapter, args, device) #XD

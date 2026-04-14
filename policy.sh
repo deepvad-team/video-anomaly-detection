@@ -1,0 +1,18 @@
+python train_safe_meta_policy.py \
+  --model_ckpt ../../minjeong/unsupervised_ckpt/UCF_all_cnn_final_20260331_020353_wv5ldb2h.pkl \
+  --pseudofile ../../minjeong/Unsup_labels/pseudo_labels_swap_90.npy \
+  --conall_path ../../C2FPL/concat_UCF.npy \
+  --nalist_path list/nalist_i3d.npy \
+  --save_dir safe_meta_policy_ckpt \
+  --adapter_init_path adapter_init.pt \
+  --warmup_segments 5 \
+  --inner_steps 5 \
+  --hidden_dim 64 \
+  --lr_max 0.003 \
+  --epochs 3 \
+  --lr 1e-3 \
+  --lambda_norm 1.0 \
+  --lambda_preserve 1.5 \
+  --lambda_rank 0.5 \
+  --lambda_gate 0.05\
+  --lambda_alpha 0.02

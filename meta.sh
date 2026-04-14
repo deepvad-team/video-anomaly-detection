@@ -1,0 +1,11 @@
+python meta_prefix_train.py \
+  --model_ckpt ../../minjeong/unsupervised_ckpt/UCF_all_cnn_final_20260331_020353_wv5ldb2h.pkl \
+  --pseudofile ../../minjeong/Unsup_labels/pseudo_labels_swap_90.npy \
+  --conall_path ../../C2FPL/concat_UCF.npy \
+  --nalist_path_meta list/nalist_i3d.npy \
+  --warmup_segments 5 \
+  --inner_steps 5 \
+  --inner_lr 0.001 \
+  --outer_lr 0.0005 \
+  --meta_epochs 10 \
+  --label_smoothing

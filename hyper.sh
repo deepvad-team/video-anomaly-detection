@@ -1,0 +1,11 @@
+python train_prefix_hyper.py \
+  --model_ckpt ../../minjeong/unsupervised_ckpt/UCF_all_cnn_final_20260331_020353_wv5ldb2h.pkl \
+  --pseudofile ../../minjeong/Unsup_labels/pseudo_labels_swap_90.npy \
+  --conall_path ../../C2FPL/concat_UCF.npy \
+  --nalist_path list/nalist_i3d.npy \
+  --save_dir prefix_hyper_ckpt \
+  --adapter_init_path adapter_init.pt \
+  --warmup_segments 5 \
+  --epochs 15 \
+  --lr 1e-3 \
+  --label_smoothing
