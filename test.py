@@ -1486,14 +1486,35 @@ def summarize_demo_candidates(seg_scores_all, nalist, out_csv_path, video_names=
     return rows
 
 
-def save_video_score_plots(seg_scores_all, nalist, out_dir, video_names=None, threshold=None, top_n=None):
+def save_video_score_plots(
+    seg_scores_all,
+    nalist,
+    out_dir,
+    video_names=None,
+    threshold=None,
+    top_n=None,
+    gt=None,
+    frame_repeat=16,
+    show_gt=True,
+    show_prefix=False,
+    warmup_segments=5,
+):
     """
     비디오별 score timeline plot 저장
+    - gt가 주어지면 실제 anomaly GT 구간을 빨간 음영으로 표시
+    - show_prefix=True면 warm-up prefix 구간을 회색 음영으로 표시
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     num_videos = len(nalist) if top_n is None else min(top_n, len(nalist))
+
+    # 전체 GT를 segment-level로 통일
+    seg_gt_all = None
+    if gt is not None:
+        total_T = int(nalist[-1, 1])
+        seg_gt_all, gt_mode = _segment_gt_from_gt(gt, total_T, frame_repeat=frame_repeat)
+        print(f"[plot] GT mode: {gt_mode} -> segment-level GT for plotting")
 
     for vid_idx in range(num_videos):
         s, e = map(int, nalist[vid_idx])
@@ -1503,15 +1524,50 @@ def save_video_score_plots(seg_scores_all, nalist, out_dir, video_names=None, th
             continue
 
         name = video_names[vid_idx] if video_names is not None and vid_idx < len(video_names) else f"video_{vid_idx}"
+        x = np.arange(len(scores))
 
         plt.figure(figsize=(10, 3.5))
-        plt.plot(np.arange(len(scores)), scores, linewidth=1.5)
+        plt.plot(x, scores, linewidth=1.5, label="score")
+
         if threshold is not None:
-            plt.axhline(threshold, linestyle="--")
+            plt.axhline(threshold, linestyle="--", label=f"threshold={threshold:.2f}")
+
+        # prefix warm-up 구간 표시 (선택)
+        if show_prefix and warmup_segments > 0:
+            prefix_len = min(warmup_segments, len(scores))
+            if prefix_len > 0:
+                plt.axvspan(-0.5, prefix_len - 0.5, alpha=0.12, color="gray", label="warm-up prefix")
+
+        # 실제 GT anomaly 구간 표시
+        if show_gt and seg_gt_all is not None:
+            seg_gt_video = np.asarray(seg_gt_all[s:e], dtype=np.int64)
+
+            in_run = False
+            run_start = None
+            for i, g in enumerate(seg_gt_video):
+                if g == 1 and not in_run:
+                    in_run = True
+                    run_start = i
+                elif g == 0 and in_run:
+                    plt.axvspan(run_start - 0.5, i - 0.5, alpha=0.22, color="red")
+                    in_run = False
+                    run_start = None
+
+            if in_run and run_start is not None:
+                plt.axvspan(run_start - 0.5, len(seg_gt_video) - 0.5, alpha=0.22, color="red")
 
         plt.title(f"{name} | vid_idx={vid_idx} | T={e-s}")
         plt.xlabel("segment index")
         plt.ylabel("anomaly score")
+        plt.ylim(0.0, 0.3)
+        plt.tight_layout()
+
+        # 범례 중복 제거
+        handles, labels = plt.gca().get_legend_handles_labels()
+        uniq = dict(zip(labels, handles))
+        if len(uniq) > 0:
+            plt.legend(uniq.values(), uniq.keys(), loc="upper right", fontsize=8)
+
         plt.tight_layout()
 
         safe_name = str(name).replace("/", "_").replace("\\", "_")
@@ -1662,7 +1718,7 @@ if __name__ == '__main__':
     model = Model_V2_AllCNN(args.feature_size).to(device)
     #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../C2FPL/ckpt/UCFfinal(git).pkl').items()})
     #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('unsupervised_ckpt/UCF_final_20260218_165841_tgkaplua.pkl').items()})  #train from scratch and evaluate
-    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_all_cnn_final_20260331_133608_6mt2yybz.pkl').items()})
+    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_all_cnn_best_20260331_020353_wv5ldb2h.pkl').items()})
     
     #ckpt = torch.load('unsupervised_ckpt/UCF_best_20260323_123936_spychkjs.pkl', map_location=device)
     #state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
@@ -1819,6 +1875,10 @@ if __name__ == '__main__':
         out_dir="demo_exports/base_plots",
         video_names=video_names,
         threshold=0.2,
+        gt=gt,
+        frame_repeat=16,
+        show_gt=True,
+        show_prefix=False,
     )
 
     # 3) warm-up TEA 쪽도 같이 보고 싶으면 저장
@@ -1836,6 +1896,11 @@ if __name__ == '__main__':
         out_dir="demo_exports/tea_warm_plots",
         video_names=video_names,
         threshold=0.2,
+        gt=gt,
+        frame_repeat=16,
+        show_gt=True,
+        show_prefix=True,
+        warmup_segments=5,
     )
 
     # 4) 우선 csv 보고 직접 4개 고른 다음, 그 vid_idx를 넣어서 JSON export

@@ -6,7 +6,7 @@ parser.add_argument('--feature-size', type=int, default=2048, help='size of feat
 
 parser.add_argument('--rgb-list', default='./list/ucf-c3d.list', help='list of rgb features ')
 parser.add_argument('--test-rgb-list', default='./list/ucf-c3d-test.list', help='list of test rgb features ')
-parser.add_argument('--gt', default='list/gt-ucf_RTFM.npy', help='file of ground truth ')
+parser.add_argument('--gt', default='list/gt-ucf-RTFM.npy', help='file of ground truth ')
 
 parser.add_argument('--lr', type=float, default=0.01, help='learning rate (default: 0.0001)')
 

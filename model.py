@@ -99,21 +99,21 @@ class Model_V2_AllCNN(nn.Module):
         self.conv_att1 = nn.Conv1d(n_features, 256, kernel_size, padding=kernel_size//2)
         
         # Layer 2: 512 → 128 (WITH temporal!)
-        self.conv2 = nn.Conv1d(256, 32, kernel_size, padding=kernel_size//2)
+        self.conv2 = nn.Conv1d(256, 64, kernel_size, padding=kernel_size//2)
         self.bn2 = nn.BatchNorm1d(64)
         
         # Attention (also temporal!)
-        self.conv_att2 = nn.Conv1d(256, 32, kernel_size, padding=kernel_size//2)
+        self.conv_att2 = nn.Conv1d(256, 64, kernel_size, padding=kernel_size//2)
         
         # Layer 3: 128 → 32 (WITH temporal!)
         #self.conv3 = nn.Conv1d(128, 32, kernel_size, padding=kernel_size//2)
         #self.bn3 = nn.BatchNorm1d(32)
         
         # Output: Only 1 FC at the end
-        self.fc_out = nn.Linear(32, 1)
+        self.fc_out = nn.Linear(64, 1)
         
-        self.dropout1 = nn.Dropout(0.2)
-        self.dropout2 = nn.Dropout(0.4)
+        self.dropout1 = nn.Dropout(0.6)
+        self.dropout2 = nn.Dropout(0.6)
         self.gelu = nn.GELU()
         self.sigmoid = nn.Sigmoid()
     
@@ -135,15 +135,17 @@ class Model_V2_AllCNN(nn.Module):
         att1 = torch.sigmoid(self.conv_att1(x))  # (B, 512, T)
         x = self.conv1(x)                         # (B, 512, T)
         #x = self.bn1(x)
-        x = x * att1 + att1  # Gated attention
+        #x = x * att1 + att1  # Gated attention
         x = self.gelu(x)
+        x = x + att1
         x = self.dropout1(x)
         
         att2 = torch.sigmoid(self.conv_att2(x))  # (B, 32, T)
         x = self.conv2(x)                         # (B, 32, T)
         #x = self.bn2(x)
-        x = x * att2 + att2
+        #x = x * att2 + att2
         x = self.gelu(x)
+        x = x + att2
         x = self.dropout2(x)
         
         #x = self.conv3(x)      # (B, 32, T)
@@ -155,7 +157,7 @@ class Model_V2_AllCNN(nn.Module):
         
         # Output FC
         if use_temporal and T > 1:
-            x = x.reshape(B, T, 32)
+            x = x.reshape(B, T, 64)
         else:
             x = x.squeeze(1)
         
