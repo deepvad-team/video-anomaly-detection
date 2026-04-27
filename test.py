@@ -142,7 +142,7 @@ def get_video_scores_and_mask(X_flat, nalist, vid_idx, adapter, model, device, q
     """
     s, e = nalist[vid_idx]
     x_video = X_flat[s:e]   # (T_i, 1024)
-    x_video = _normalize_video_feature_shape(x_video)
+    x_video = _normalize_video_feature_shape(x_video)              #XD_R50NL로 돌릴 때는 이거 주석처리 필요!!1
     x_video = torch.from_numpy(x_video).float().to(device)
 
     x_video = x_video.unsqueeze(0)  # (1, T, 2024)
@@ -1718,7 +1718,7 @@ if __name__ == '__main__':
     model = Model_V2_AllCNN(args.feature_size).to(device)
     #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../C2FPL/ckpt/UCFfinal(git).pkl').items()})
     #model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('unsupervised_ckpt/UCF_final_20260218_165841_tgkaplua.pkl').items()})  #train from scratch and evaluate
-    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_all_cnn_best_20260331_020353_wv5ldb2h.pkl').items()})
+    model_dict = model.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('../../minjeong/unsupervised_ckpt/UCF_all_cnn_final_20260331_030931_aawcxdm7.pkl').items()})
     
     #ckpt = torch.load('unsupervised_ckpt/UCF_best_20260323_123936_spychkjs.pkl', map_location=device)
     #state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
@@ -1814,7 +1814,7 @@ if __name__ == '__main__':
 
         adapt_prefix_only=False,          # baseline -> 적응 안 함
         exclude_prefix_from_eval=True,    # suffix만 평가
-        warmup_segments=5,
+        warmup_segments=40,
     )
 
     print("\n[BASELINE - SUFFIX ONLY]")
@@ -1834,7 +1834,7 @@ if __name__ == '__main__':
 
     use_tea=True,
 
-    q=1.0,   
+    q=0.25,   
     min_keep=8,
     #min_run은 여기선 의미 없음!
     tea_lr=1e-2,
@@ -1843,7 +1843,7 @@ if __name__ == '__main__':
 
     adapt_prefix_only=True,           # prefix 안에서만 selection/update
     exclude_prefix_from_eval=True,    # suffix만 평가
-    warmup_segments=5,                # adaptation pool 지정 (prefix)
+    warmup_segments=40,                # adaptation pool 지정 (prefix)
     )
 
     print("\n[PREFIX WARM-UP TEA]")
@@ -1855,7 +1855,7 @@ if __name__ == '__main__':
     # --------------------------------------------------
     # Demo candidate analysis / export
     # --------------------------------------------------
-
+    '''
     # 비디오 이름 로드
     video_names = load_video_names("list/ucf-i3d_test_fixed_local.list")
     
@@ -1900,8 +1900,15 @@ if __name__ == '__main__':
         frame_repeat=16,
         show_gt=True,
         show_prefix=True,
-        warmup_segments=5,
+        warmup_segments=20,
     )
+
+    '''
+
+
+
+
+    '''
 
     # 4) 우선 csv 보고 직접 4개 고른 다음, 그 vid_idx를 넣어서 JSON export
     # 예시: 일단 임시로 4개 지정
@@ -1915,12 +1922,13 @@ if __name__ == '__main__':
         video_names=video_names,
         fps=30,
         frames_per_seg=16,
-        warmup_segments=5,
+        warmup_segments=20,
         display_reference=0.10,
         selected_vid_indices=selected_vid_indices,
         actual_video_duration_map=None,
     )
-    
+    '''
+
 
     '''
     # 비디오 이름이 있으면 같이 넣기

@@ -22,7 +22,7 @@ def Concat_list_all_crop_feedback(Test=False, create='False'): #UCF
         #변경부분--
         # con_test = np.load("concatenated/Concat_test_10.npy")
         total_T = len(gt) // 16 
-        con_test = np.memmap('../../C2FPL/Concat_test_10.npy',dtype="float32",mode="r",shape=(total_T,10,2048)).copy() #(69634,10,2048)
+        con_test = np.memmap('../../C2FPL/Concat_test_10.npy',dtype="float32",mode="r",shape=(total_T,10,2048)) #(69634,10,2048)
 
         print('Testset size:', con_test.shape)
         return con_test

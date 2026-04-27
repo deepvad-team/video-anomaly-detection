@@ -62,7 +62,7 @@ parser.add_argument('--mix-alpha', type=float, default=0.5)
 # paths
 parser.add_argument('--nalist-path', type=str, default='list/nalist_XD_test_R50NL.npy')
 parser.add_argument('--train-concat-path', type=str, default='../../C2FPL/concat_UCF.npy')
-parser.add_argument('--test-concat-path', type=str, default='Concat_XD_test_R50NL.npy')
+parser.add_argument('--test-concat-path', type=str, default='Concat_XD_test.npy')
 parser.add_argument('--center-path', type=str, default='unsupervised_ckpt/center.pt')
 
 parser.add_argument('--eval-every', type=int, default=0,
