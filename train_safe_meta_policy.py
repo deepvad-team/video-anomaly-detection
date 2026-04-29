@@ -106,6 +106,13 @@ def train_one_epoch(policy_net, detector, base_adapter, loader, optimizer, devic
     total_gate = 0.0
     total_used = 0
 
+    gate_vals = []
+    alpha_vals = []
+    loss_gate_vals = []
+    loss_alpha_vals = []
+    dgamma_vals = []
+    dbeta_vals = []
+
     pbar = tqdm(loader, desc="Train Safe Meta Policy", dynamic_ncols=True)
 
     for x_video, y_video, vid_idx in pbar:
@@ -155,12 +162,32 @@ def train_one_epoch(policy_net, detector, base_adapter, loader, optimizer, devic
 
         g_tensor = inner_info["g_tensor"]
         alpha_tensor = inner_info["alpha_tensor"]
-
+        '''
         loss_gate = g_tensor.mean()
         loss_alpha = (alpha_tensor / max(args.lr_max, 1e-8)).mean()
-        
+        '''
+
+        if args.gate_reg_mode == "l1":
+            loss_gate = g_tensor.mean()
+        elif args.gate_reg_mode == "target_l2":
+            loss_gate = ((g_tensor - args.target_gate) ** 2).mean()
+        else:
+            raise ValueError(f"Unknown gate_reg_mode: {args.gate_reg_mode}")
+
+        loss_alpha = (alpha_tensor / max(args.lr_max, 1e-8)).mean()
+
+
         g_val = inner_info["gate"]
         alpha_val = inner_info["alpha"]
+        gate_vals.append(float(g_val))
+        alpha_vals.append(float(alpha_val))
+        loss_gate_vals.append(float(loss_gate.item()))
+        loss_alpha_vals.append(float(loss_alpha.item()))
+
+        if "dgamma_norm" in inner_info:
+            dgamma_vals.append(float(inner_info["dgamma_norm"]))
+        if "dbeta_norm" in inner_info:
+            dbeta_vals.append(float(inner_info["dbeta_norm"]))
 
         loss = (
             args.lambda_norm * loss_norm
@@ -193,14 +220,39 @@ def train_one_epoch(policy_net, detector, base_adapter, loader, optimizer, devic
     if total_used == 0:
         return None
 
+    gate_arr = np.asarray(gate_vals, dtype=np.float64) if len(gate_vals) else np.zeros(1)
+    alpha_arr = np.asarray(alpha_vals, dtype=np.float64) if len(alpha_vals) else np.zeros(1)
+    loss_gate_arr = np.asarray(loss_gate_vals, dtype=np.float64) if len(loss_gate_vals) else np.zeros(1)
+    loss_alpha_arr = np.asarray(loss_alpha_vals, dtype=np.float64) if len(loss_alpha_vals) else np.zeros(1)
+    dgamma_arr = np.asarray(dgamma_vals, dtype=np.float64) if len(dgamma_vals) else np.zeros(1)
+    dbeta_arr = np.asarray(dbeta_vals, dtype=np.float64) if len(dbeta_vals) else np.zeros(1)
+
     return {
         "loss": total_loss / total_used,
         "loss_norm": total_norm / total_used,
         "loss_preserve": total_preserve / total_used,
         "loss_rank": total_rank / total_used,
         "gate_mean": total_gate / total_used,
-    }
 
+        "gate_median": float(np.median(gate_arr)),
+        "gate_min": float(np.min(gate_arr)),
+        "gate_max": float(np.max(gate_arr)),
+        "alpha_mean": float(np.mean(alpha_arr)),
+        "alpha_median": float(np.median(alpha_arr)),
+        "alpha_min": float(np.min(alpha_arr)),
+        "alpha_max": float(np.max(alpha_arr)),
+
+        "gate_ratio_gt_1e3": float((gate_arr > 1e-3).mean()),
+        "gate_ratio_gt_1e2": float((gate_arr > 1e-2).mean()),
+        "gate_ratio_gt_5e2": float((gate_arr > 5e-2).mean()),
+        "gate_ratio_gt_2e1": float((gate_arr > 2e-1).mean()),
+
+        "loss_gate_mean": float(np.mean(loss_gate_arr)),
+        "loss_alpha_mean": float(np.mean(loss_alpha_arr)),
+
+        "dgamma_norm_mean": float(np.mean(dgamma_arr)),
+        "dbeta_norm_mean": float(np.mean(dbeta_arr)),
+    }
 
 def main():
     parser = argparse.ArgumentParser("train_safe_meta_policy")
@@ -242,6 +294,13 @@ def main():
     parser.add_argument("--tail_gap_pseudo", type=float, default=0.02)
     parser.add_argument("--min_keep_normal", type=int, default=4)
     parser.add_argument("--min_keep_anom", type=int, default=2)
+
+
+    parser.add_argument("--run_name", type=str, default="safe_meta_policy")
+    parser.add_argument("--gate_init_bias", type=float, default=-0.5)
+    parser.add_argument("--gate_reg_mode", type=str, default="l1",
+                        choices=["l1", "target_l2"])
+    parser.add_argument("--target_gate", type=float, default=0.1)
     
     parser.add_argument("--seed", type=int, default=42)
 
@@ -263,6 +322,7 @@ def main():
         stats_dim=7,
         hidden_dim=args.hidden_dim,
         lr_max=args.lr_max,
+        gate_init_bias=args.gate_init_bias,
     ).to(device)
 
     optimizer = torch.optim.Adam(policy_net.parameters(), lr=args.lr)
@@ -281,9 +341,10 @@ def main():
     )
 
     best_loss = 1e9
-    best_path = os.path.join(args.save_dir, "safe_meta_policy_best.pt")
-    last_path = os.path.join(args.save_dir, "safe_meta_policy_last.pt")
-
+    #best_path = os.path.join(args.save_dir, "safe_meta_policy_best.pt")
+    #last_path = os.path.join(args.save_dir, "safe_meta_policy_last.pt")
+    best_path = os.path.join(args.save_dir, f"{args.run_name}_best.pt")
+    last_path = os.path.join(args.save_dir, f"{args.run_name}_last.pt")
     for epoch in range(1, args.epochs + 1):
         metrics = train_one_epoch(
             policy_net=policy_net,
@@ -305,7 +366,20 @@ def main():
             f"norm={metrics['loss_norm']:.4f} "
             f"preserve={metrics['loss_preserve']:.4f} "
             f"rank={metrics['loss_rank']:.4f} "
-            f"gate_mean={metrics['gate_mean']:.4f}"
+            f"gate_mean={metrics['gate_mean']:.6f} "
+            f"gate_med={metrics['gate_median']:.6f} "
+            f"gate_min={metrics['gate_min']:.3e} "
+            f"gate_max={metrics['gate_max']:.3e} "
+            f"g>1e-3={metrics['gate_ratio_gt_1e3']:.3f} "
+            f"g>1e-2={metrics['gate_ratio_gt_1e2']:.3f} "
+            f"g>5e-2={metrics['gate_ratio_gt_5e2']:.3f} "
+            f"g>0.2={metrics['gate_ratio_gt_2e1']:.3f} "
+            f"alpha_mean={metrics['alpha_mean']:.6f} "
+            f"alpha_med={metrics['alpha_median']:.6f} "
+            f"Lgate={metrics['loss_gate_mean']:.6f} "
+            f"Lalpha={metrics['loss_alpha_mean']:.6f} "
+            f"|dg|={metrics['dgamma_norm_mean']:.6f} "
+            f"|db|={metrics['dbeta_norm_mean']:.6f}"
         )
 
         save_obj = {

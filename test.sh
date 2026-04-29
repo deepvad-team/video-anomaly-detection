@@ -6,13 +6,13 @@ python test.py \
     --batch-size 128 \
     --lr 0.01\
     --feature-size 2048 \
-    --gt list/gt-ucf-RTFM.npy\
+    --gt list/gt-ucf-R.npy\
     --datasetname UCF \
     --pseudofile ../../minjeong/Unsup_labels/pseudo_labels_swap_90.npy \
     --nalist-path list/nalist_test_i3d.npy \
     --adapter_init_path adapter_init.pt \
-    --model_ckpt ../../minjeong/unsupervised_ckpt/UCF_all_cnn_final_20260414_131646_2pdea3yj.pkl \
-    --policy_ckpt safe_meta_policy_ckpt/safe_meta_policy_best.pt \
+    --model_ckpt ../../minjeong/unsupervised_ckpt/UCF_all_cnn_final_20260331_020353_wv5ldb2h.pkl \
+    --policy_ckpt safe_meta_policy_lg0_la0/safe_meta_policy_best.pt \
 
     #--gate_ckpt prefix_gate_best.pt \
     #--gate_threshold 0.5 \

@@ -19,7 +19,7 @@ class SafeMetaPolicyNet(nn.Module):
     - w: prefix segment weights
     를 예측하는 policy net
     """
-    def __init__(self, warmup_segments=5, stats_dim=7, hidden_dim=64, lr_max=1e-2):
+    def __init__(self, warmup_segments=5, stats_dim=7, hidden_dim=64, lr_max=1e-2, gate_init_bias=-0.5,):
         super().__init__()
         self.warmup_segments = warmup_segments
         self.stats_dim = stats_dim
@@ -40,7 +40,9 @@ class SafeMetaPolicyNet(nn.Module):
 
         # 처음엔 보수적으로 시작
         nn.init.zeros_(self.gate_head.weight)
-        nn.init.constant_(self.gate_head.bias, -0.5)   # g ~ 0.38 근처
+        #nn.init.constant_(self.gate_head.bias, -0.5)   # g ~ 0.38 근처
+        nn.init.constant_(self.gate_head.bias, gate_init_bias)
+        self.gate_init_bias = gate_init_bias
 
         nn.init.zeros_(self.alpha_head.weight)
         nn.init.constant_(self.alpha_head.bias, -2.0)  # alpha는 작게 시작
@@ -231,6 +233,9 @@ def policy_inner_update(
         "alpha": float(alpha.item()),
         "weights": w.detach().cpu().tolist(),
         "skipped": False,
+
+        "dgamma_norm": float(torch.norm(gamma - gamma0).item()),
+        "dbeta_norm": float(torch.norm(beta - beta0).item()),
     }
 
     return gamma, beta, info

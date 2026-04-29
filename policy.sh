@@ -3,10 +3,10 @@ python train_safe_meta_policy.py \
   --pseudofile ../../minjeong/Unsup_labels/pseudo_labels_swap_90.npy \
   --conall_path ../../C2FPL/concat_UCF.npy \
   --nalist_path list/nalist_i3d.npy \
-  --save_dir safe_meta_policy_ckpt \
+  --save_dir safe_meta_policy_lg1e-5_la1e-5 \
   --adapter_init_path adapter_init.pt \
   --warmup_segments 5 \
-  --inner_steps 5 \
+  --inner_steps 1 \
   --hidden_dim 64 \
   --lr_max 0.003 \
   --epochs 3 \
@@ -14,5 +14,5 @@ python train_safe_meta_policy.py \
   --lambda_norm 1.0 \
   --lambda_preserve 1.5 \
   --lambda_rank 0.5 \
-  --lambda_gate 0.05\
-  --lambda_alpha 0.02
+  --lambda_gate 1e-5\
+  --lambda_alpha 1e-5\

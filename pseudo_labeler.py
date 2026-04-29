@@ -1,3 +1,5 @@
+# pseudo_labeler.py -> sh train.sh로 모델 학습을 진행하기 전 이 모듈 먼저 돌려 gt 역할을 할 pseudo label을 생성할 것임
+# 20260429 현재 진행 중인 코드 개선 과정에서 본 파일의 결과로 저장된 pseudo_labels_swap_90.npy 파일이 pseudo label로 사용되고 있음.  
 
 """
 Improved Pseudo Labeling with Post-processing

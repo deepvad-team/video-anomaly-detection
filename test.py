@@ -708,7 +708,30 @@ def eval_xd_local_prototype_only(
 
 
 
+def _keep_runs_min_len(mask_1d: torch.Tensor, min_len: int) -> torch.Tensor:
+    """
+    mask_1d: (T,) bool tensor
+    min_len 이상 연속 True run만 남긴 mask 반환
+    """
+    if mask_1d.numel() == 0:
+        return mask_1d
 
+    out = torch.zeros_like(mask_1d, dtype=torch.bool)
+    T = int(mask_1d.shape[0])
+
+    i = 0
+    while i < T:
+        if bool(mask_1d[i].item()):
+            j = i
+            while j < T and bool(mask_1d[j].item()):
+                j += 1
+            run_len = j - i
+            if run_len >= min_len:
+                out[i:j] = True
+            i = j
+        else:
+            i += 1
+    return out
 
 
 # ---------------------------------------------------------------------------------
@@ -736,6 +759,11 @@ def _tea_update_one_video(
     # prefix only adaptation & suffix evaluation 을 위한 인자들
     adapt_prefix_only=False,
     warmup_segments=5,
+
+    lambda_anchor=0.01,
+    anchor_type="score_l2",
+    use_temporal_score_mask=False,
+    min_run_window=3,
 ):
     """
     비디오 하나에 대해 adapter_episode.ln만 업데이트.
@@ -845,7 +873,34 @@ def _tea_update_one_video(
         # 1) normal 후보 선택
         if selection_mode == "score":
             thresh = torch.quantile(prob, q)
-            mask = prob <= thresh
+            mask_raw = prob <= thresh
+            num_selected_raw = int(mask_raw.sum().item())
+            if use_temporal_score_mask:
+                mask_temporal = _keep_runs_min_len(mask_raw, min_run_window)
+                num_selected_temporal = int(mask_temporal.sum().item())
+
+                if num_selected_temporal >= min_keep:
+                    mask = mask_temporal
+                    fallback_mode = "none"
+                elif num_selected_raw >= min_keep:
+                    mask = mask_raw
+                    fallback_mode = "raw_score"
+                else:
+                    topk_idx = torch.argsort(prob.detach())[:min_keep]
+                    mask = torch.zeros_like(prob, dtype=torch.bool)
+                    mask[topk_idx] = True
+                    fallback_mode = "topk"
+            else:
+                mask = mask_raw
+                num_selected_temporal = num_selected_raw
+                fallback_mode = "disabled"
+
+                if num_selected_raw < min_keep:
+                    topk_idx = torch.argsort(prob.detach())[:min_keep]
+                    mask = torch.zeros_like(prob, dtype=torch.bool)
+                    mask[topk_idx] = True
+                    fallback_mode = "topk"
+
             num_selected = int(mask.sum().item())
             proto_dists = None
 
@@ -926,10 +981,16 @@ def _tea_update_one_video(
         prob_sel = prob[mask].detach()
         logit_sel = logit[mask].detach()
 
+        # baseline cache (selected)
+        prob_before_sel = prob_sel
+        logit_before_sel = logit_sel
+
         # 2) real energy
         x_sel_2048 = adapter_episode(x_sel)
-        _, logit_real = model(x_sel_2048, return_logits=True)
+        prob_real, logit_real = model(x_sel_2048, return_logits=True)
         logit_real = logit_real.squeeze(-1)
+        prob_after_sel = prob_real.squeeze(-1)
+
         tau = 0.3   # temperature; lower = more peaked toward the most confident normals
         with torch.no_grad():
             w = torch.softmax(-prob_sel / tau, dim=0)  # (N,)  lower prob_sel = higher weight
@@ -964,12 +1025,23 @@ def _tea_update_one_video(
 
         #loss = F.relu(E_real - E_fake)
 
-        loss = E_real
+        #loss = E_real
 
-        #lambda 앵커 추가로 strong detector에서 성능 하락 방지 loss = E_real + lambda_anchor * ||ln - ln_init||^2-----------
-        lambda_anchor = 1e-3
+        # 5) lambda 앵커 추가로 strong detector에서 성능 하락 방지 loss = E_real + lambda_anchor * ||ln - ln_init||^2-----------
+        if anchor_type == "score_l2":
+            anchor_loss = ((prob_after_sel - prob_before_sel) ** 2).mean()
+        elif anchor_type == "logit_l2":
+            anchor_loss = ((logit_real - logit_before_sel) ** 2).mean()
+        else:
+            raise ValueError(f"Unknown anchor_type: {anchor_type}")
+        
+        loss = E_real + lambda_anchor * anchor_loss
+        
+        lambda_anchor_dummy = 1e-3
         anchor = ((adapter_episode.ln.weight - ln_weight_init) ** 2).sum()\
         +  ((adapter_episode.ln.bias - ln_bias_init) ** 2).sum()
+
+
         #loss = F.relu(E_real-E_fake) + lambda_anchor * anchor
         #loss = E_real + lambda_anchor * anchor
         #loss = (E_real - E_fake) + lambda_anchor * anchor
@@ -1000,6 +1072,30 @@ def _tea_update_one_video(
             "adapt_prefix_only": adapt_prefix_only,
             "prefix_len": int(prefix_len),
             "adapt_pool_size": int(x_adapt.shape[0]),
+
+
+            "loss_total": float(loss.item()),
+            "loss_real": float(E_real.item()),
+            "loss_anchor": float(anchor_loss.item()),
+            "lambda_anchor": float(lambda_anchor),
+            "anchor_type": anchor_type,
+
+            "prob_before_sel_mean": float(prob_before_sel.mean().item()),
+            "prob_after_sel_mean": float(prob_after_sel.mean().item()),
+            "delta_prob_sel_mean": float((prob_after_sel.mean() - prob_before_sel.mean()).item()),
+
+            "logit_before_sel_mean": float(logit_before_sel.mean().item()),
+            "logit_after_sel_mean": float(logit_real.mean().item()),
+            "delta_logit_sel_mean": float((logit_real.mean() - logit_before_sel.mean()).item()),
+
+            "ln_drift_l2": float(anchor.item()),
+            "num_selected_raw": int(num_selected_raw) if 'num_selected_raw' in locals() else int(num_selected),
+            "num_selected_temporal": int(num_selected_temporal) if 'num_selected_temporal' in locals() else int(num_selected),
+            "fallback_mode": fallback_mode if 'fallback_mode' in locals() else "na",
+            "min_run_window": int(min_run_window),
+
+
+            
         })
 
     return adapter_episode, debug
@@ -1497,6 +1593,14 @@ def eval_xd_with_policy_then_tea(
     adapt_prefix_only=True,
     warmup_segments=5,
     verbose_every=100,
+
+    gate_low=0.00, 
+    gate_high=0.00,
+
+    lambda_anchor=0.01, # 실험 1 (0.01 > 0.05 라서 0.01로 고정하기로)
+    anchor_type="score_l2",
+    use_temporal_score_mask=True,
+    min_run_window=4,
 ):
     total_T = X_flat.shape[0]
     seg_gt, gt_mode = _segment_gt_from_gt(gt, total_T, frame_repeat=frame_repeat)
@@ -1526,6 +1630,16 @@ def eval_xd_with_policy_then_tea(
             gate_threshold=policy_gate_threshold,
         )
 
+        g = policy_debug.get("gate", None)
+        if g is None:
+            tea_steps_eff = tea_steps_per_video
+        elif g < gate_low:
+            tea_steps_eff = 0
+        elif g < gate_high:
+            tea_steps_eff = 1
+        else:
+            tea_steps_eff = tea_steps_per_video
+
         # 2) 그 보정된 adapter 상태에서 기존 TEA refinement
         if use_tea:
             adapter_episode, tea_debug = _tea_update_one_video(
@@ -1539,12 +1653,19 @@ def eval_xd_with_policy_then_tea(
                 sgld_lr=sgld_lr,
                 sgld_noise=sgld_noise,
                 tea_lr=tea_lr,
-                tea_steps_per_video=tea_steps_per_video,
+                #tea_steps_per_video=tea_steps_per_video,
+                tea_steps_per_video=tea_steps_eff,
+
                 selection_mode=selection_mode,
                 n_reference=n_reference,
                 proto_l2_normalize=proto_l2_normalize,
                 adapt_prefix_only=adapt_prefix_only,
                 warmup_segments=warmup_segments,
+
+                lambda_anchor=lambda_anchor,
+                anchor_type=anchor_type,
+                use_temporal_score_mask=use_temporal_score_mask,
+                min_run_window=min_run_window,
             )
         else:
             tea_debug = None
@@ -1566,6 +1687,9 @@ def eval_xd_with_policy_then_tea(
             "T": int(e - s),
             "policy_debug": policy_debug,
             "tea_debug": tea_debug,
+            "gate": g,
+            "tea_steps_eff": int(tea_steps_eff),
+            "tea_skipped_by_gate": bool(tea_steps_eff == 0),
         })
 
         if (vid_idx % verbose_every == 0) or (vid_idx == len(nalist) - 1):
@@ -2427,7 +2551,7 @@ if __name__ == '__main__':
             # TEA refinement
             use_tea=True,
             q=1.0,
-            min_keep=8,
+            min_keep=8,   # 실험 3 제대로 하려면 얘를 min_run_windows 보다 작은 값으로 해야! (근데 지금 warmup pool이 5개라..)
             min_run=2,
             sgld_steps=10,
             sgld_lr=0.05,
